@@ -62,34 +62,47 @@ app.post("/telegram", async (req, res) => {
                 text: "Gerando pagamento..."
             })
 
-            // Criar sessão de pagamento Stripe
-            const session = await stripe.checkout.sessions.create({
-                payment_method_types: ["card"],
-                line_items: [
-                    {
-                        price_data: {
-                            currency: "eur",
-                            product_data: {
-                                name: "VIP Telegram"
+            try {
+
+                // Criar sessão de pagamento Stripe
+                const session = await stripe.checkout.sessions.create({
+                    payment_method_types: ["card"],
+                    line_items: [
+                        {
+                            price_data: {
+                                currency: "eur",
+                                product_data: {
+                                    name: "VIP Telegram"
+                                },
+                                unit_amount: 990
                             },
-                            unit_amount: 990
-                        },
-                        quantity: 1
-                    }
-                ],
-                mode: "payment",
-                success_url: "https://t.me",
-                cancel_url: "https://t.me"
-            })
+                            quantity: 1
+                        }
+                    ],
+                    mode: "payment",
+                    success_url: "https://t.me",
+                    cancel_url: "https://t.me"
+                })
 
-            // salvar usuário
-            users[session.id] = userId
+                // salvar usuário
+                users[session.id] = userId
 
-            // enviar link de pagamento
-            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                chat_id: chatId,
-                text: `💳 Pague aqui:\n${session.url}`
-            })
+                // enviar link de pagamento
+                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                    chat_id: chatId,
+                    text: `💳 Pague aqui:\n${session.url}`
+                })
+
+            } catch (stripeError) {
+
+                console.log("ERRO STRIPE:", stripeError)
+
+                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                    chat_id: chatId,
+                    text: "❌ Erro ao gerar pagamento."
+                })
+
+            }
 
         }
 
@@ -106,32 +119,41 @@ app.post("/telegram", async (req, res) => {
 
 app.post("/webhook", async (req, res) => {
 
-    const event = req.body
+    try {
 
-    if (event.type === "checkout.session.completed") {
+        const event = req.body
 
-        const session = event.data.object
-        const userId = users[session.id]
+        if (event.type === "checkout.session.completed") {
 
-        if (userId) {
+            const session = event.data.object
+            const userId = users[session.id]
 
-            const response = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/createChatInviteLink`, {
-                chat_id: GROUP_ID,
-                member_limit: 1
-            })
+            if (userId) {
 
-            const inviteLink = response.data.result.invite_link
+                const response = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/createChatInviteLink`, {
+                    chat_id: GROUP_ID,
+                    member_limit: 1
+                })
 
-            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                chat_id: userId,
-                text: `🔓 Pagamento confirmado!\n\nEntre no grupo VIP:\n${inviteLink}`
-            })
+                const inviteLink = response.data.result.invite_link
+
+                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                    chat_id: userId,
+                    text: `🔓 Pagamento confirmado!\n\nEntre no grupo VIP:\n${inviteLink}`
+                })
+
+            }
 
         }
 
-    }
+        res.sendStatus(200)
 
-    res.sendStatus(200)
+    } catch (err) {
+
+        console.log("ERRO WEBHOOK:", err)
+        res.sendStatus(200)
+
+    }
 
 })
 
