@@ -12,151 +12,86 @@ const BOT_TOKEN = process.env.BOT_TOKEN
 const GROUP_ID = process.env.GROUP_ID
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
-let users = {}
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
-app.get("/", (req, res) => {
-    res.send("Bot running")
-})
 
+// START DO BOT
 app.post("/telegram", async (req, res) => {
 
-    try {
+const message = req.body.message
+const callback = req.body.callback_query
 
-        const body = req.body
+try {
 
-        // Mensagem normal
-        if (body.message) {
+// COMANDO /start
+if (message && message.text === "/start") {
 
-            const chatId = body.message.chat.id
-            const text = body.message.text
+await axios.post(`${TELEGRAM_API}/sendMessage`, {
+chat_id: message.chat.id,
+text: "🔥 Bem-vindo ao VIP 🔥\n\nClique abaixo para acessar o conteúdo exclusivo.",
+reply_markup: {
+inline_keyboard: [
+[
+{ text: "💎 Comprar VIP", callback_data: "buy_vip" }
+]
+]
+}
+})
 
-            if (text === "/start") {
+}
 
-                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                    chat_id: chatId,
-                    text: "💎 Assine o VIP para acessar conteúdos exclusivos",
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: "Assinar VIP 💎", callback_data: "buy_vip" }]
-                        ]
-                    }
-                })
 
-            }
+// BOTÃO COMPRAR VIP
+if (callback && callback.data === "buy_vip") {
 
-        }
+const chatId = callback.message.chat.id
 
-        // Clique no botão
-        if (body.callback_query) {
+await axios.post(`${TELEGRAM_API}/sendMessage`, {
+chat_id: chatId,
+text: "Gerando pagamento..."
+})
 
-            const callback = body.callback_query
-            const chatId = callback.message.chat.id
-            const userId = callback.from.id
+// CRIA PAGAMENTO STRIPE
+const session = await stripe.checkout.sessions.create({
+payment_method_types: ["card"],
+line_items: [
+{
+price_data: {
+currency: "brl",
+product_data: {
+name: "Acesso VIP"
+},
+unit_amount: 2000
+},
+quantity: 1
+}
+],
+mode: "payment",
+success_url: "https://t.me/ManuBelluccibot",
+cancel_url: "https://t.me/ManuBelluccibot"
+})
 
-            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
-                callback_query_id: callback.id
-            })
+await axios.post(`${TELEGRAM_API}/sendMessage`, {
+chat_id: chatId,
+text: `💳 Pague aqui para entrar no VIP:\n${session.url}`
+})
 
-            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                chat_id: chatId,
-                text: "Gerando pagamento..."
-            })
+}
 
-            try {
+res.sendStatus(200)
 
-                // Criar sessão de pagamento Stripe
-                const session = await stripe.checkout.sessions.create({
-                    payment_method_types: ["card"],
-                    line_items: [
-                        {
-                            price_data: {
-                                currency: "eur",
-                                product_data: {
-                                    name: "VIP Telegram"
-                                },
-                                unit_amount: 990
-                            },
-                            quantity: 1
-                        }
-                    ],
-                    mode: "payment",
-                    success_url: "https://t.me",
-                    cancel_url: "https://t.me"
-                })
+} catch (error) {
 
-                // salvar usuário
-                users[session.id] = userId
+console.log(error)
 
-                // enviar link de pagamento
-                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                    chat_id: chatId,
-                    text: `💳 Pague aqui:\n${session.url}`
-                })
+res.sendStatus(200)
 
-            } catch (stripeError) {
-
-                console.log("ERRO STRIPE:", stripeError)
-
-                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                    chat_id: chatId,
-                    text: "❌ Erro ao gerar pagamento."
-                })
-
-            }
-
-        }
-
-        res.sendStatus(200)
-
-    } catch (error) {
-
-        console.log("ERRO TELEGRAM:", error)
-        res.sendStatus(200)
-
-    }
+}
 
 })
 
-app.post("/webhook", async (req, res) => {
 
-    try {
-
-        const event = req.body
-
-        if (event.type === "checkout.session.completed") {
-
-            const session = event.data.object
-            const userId = users[session.id]
-
-            if (userId) {
-
-                const response = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/createChatInviteLink`, {
-                    chat_id: GROUP_ID,
-                    member_limit: 1
-                })
-
-                const inviteLink = response.data.result.invite_link
-
-                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                    chat_id: userId,
-                    text: `🔓 Pagamento confirmado!\n\nEntre no grupo VIP:\n${inviteLink}`
-                })
-
-            }
-
-        }
-
-        res.sendStatus(200)
-
-    } catch (err) {
-
-        console.log("ERRO WEBHOOK:", err)
-        res.sendStatus(200)
-
-    }
-
-})
-
+// SERVER
 app.listen(PORT, () => {
-    console.log("Server running on port " + PORT)
+console.log("Server running on port " + PORT)
 })
