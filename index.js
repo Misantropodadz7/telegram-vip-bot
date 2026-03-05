@@ -1,13 +1,134 @@
-const express = require("express");
-const app = express();
+const express = require("express")
+const bodyParser = require("body-parser")
+const axios = require("axios")
+const Stripe = require("stripe")
 
-const PORT = process.env.PORT || 8080;
+const app = express()
+
+app.use(bodyParser.json())
+
+const PORT = process.env.PORT || 8080
+
+const BOT_TOKEN = process.env.BOT_TOKEN
+const GROUP_ID = process.env.GROUP_ID
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+
+let users = {}
 
 app.get("/", (req, res) => {
-  res.send("Bot running");
-});
+    res.send("Bot running")
+})
+
+app.post("/telegram", async (req, res) => {
+
+    const message = req.body.message
+
+    if (!message) {
+        return res.sendStatus(200)
+    }
+
+    const chatId = message.chat.id
+    const text = message.text
+
+    if (text === "/start") {
+
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            chat_id: chatId,
+            text: "💎 Assine o VIP para acessar conteúdos exclusivos",
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        {
+                            text: "Assinar VIP 💎",
+                            callback_data: "buy_vip"
+                        }
+                    ]
+                ]
+            }
+        })
+
+    }
+
+    res.sendStatus(200)
+})
+
+app.post("/telegram-callback", async (req, res) => {
+
+    const callback = req.body.callback_query
+
+    if (!callback) {
+        return res.sendStatus(200)
+    }
+
+    const userId = callback.from.id
+    const chatId = callback.message.chat.id
+
+    if (callback.data === "buy_vip") {
+
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ["card"],
+            line_items: [
+                {
+                    price_data: {
+                        currency: "eur",
+                        product_data: {
+                            name: "VIP Telegram"
+                        },
+                        unit_amount: 990
+                    },
+                    quantity: 1
+                }
+            ],
+            mode: "payment",
+            success_url: "https://t.me",
+            cancel_url: "https://t.me"
+        })
+
+        users[session.id] = userId
+
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            chat_id: chatId,
+            text: `💳 Pague aqui:\n${session.url}`
+        })
+
+    }
+
+    res.sendStatus(200)
+})
+
+app.post("/webhook", async (req, res) => {
+
+    const event = req.body
+
+    if (event.type === "checkout.session.completed") {
+
+        const session = event.data.object
+
+        const userId = users[session.id]
+
+        if (userId) {
+
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/createChatInviteLink`, {
+                chat_id: GROUP_ID,
+                member_limit: 1
+            }).then(async (response) => {
+
+                const inviteLink = response.data.result.invite_link
+
+                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                    chat_id: userId,
+                    text: `🔓 Acesso liberado!\n\nEntre no grupo VIP:\n${inviteLink}`
+                })
+
+            })
+
+        }
+
+    }
+
+    res.sendStatus(200)
+})
 
 app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
-});
-
+    console.log("Server running on port " + PORT)
+})
