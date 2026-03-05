@@ -15,112 +15,106 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 let users = {}
 
 app.get("/", (req, res) => {
-  res.send("Bot running")
+    res.send("Bot running")
 })
 
 app.post("/telegram", async (req, res) => {
 
-  const body = req.body
+    const message = req.body.message
+    const callback = req.body.callback_query
 
-  if (body.message) {
+    // COMANDO /start
+    if (message) {
 
-    const chatId = body.message.chat.id
-    const text = body.message.text
+        const chatId = message.chat.id
+        const text = message.text
 
-    if (text === "/start") {
+        if (text === "/start") {
 
-      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        chat_id: chatId,
-        text: "💎 Escolha seu plano VIP",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "1 mês €9.90", callback_data: "plan_1" }],
-            [{ text: "3 meses €24.90", callback_data: "plan_3" }],
-            [{ text: "6 meses €39.90", callback_data: "plan_6" }],
-            [{ text: "1 ano €69.90", callback_data: "plan_12" }]
-          ]
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                chat_id: chatId,
+                text: "💎 Assine o VIP para acessar conteúdos exclusivos",
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            {
+                                text: "Assinar VIP 💎",
+                                callback_data: "buy_vip"
+                            }
+                        ]
+                    ]
+                }
+            })
         }
-      })
-
     }
 
-  }
+    // BOTÃO CLICADO
+    if (callback) {
 
-  if (body.callback_query) {
+        const userId = callback.from.id
+        const chatId = callback.message.chat.id
 
-    const chatId = body.callback_query.message.chat.id
-    const userId = body.callback_query.from.id
-    const plan = body.callback_query.data
+        if (callback.data === "buy_vip") {
 
-    let price = 990
+            const session = await stripe.checkout.sessions.create({
+                payment_method_types: ["card"],
+                line_items: [
+                    {
+                        price_data: {
+                            currency: "eur",
+                            product_data: {
+                                name: "VIP Telegram"
+                            },
+                            unit_amount: 990
+                        },
+                        quantity: 1
+                    }
+                ],
+                mode: "payment",
+                success_url: "https://t.me",
+                cancel_url: "https://t.me"
+            })
 
-    if (plan === "plan_3") price = 2490
-    if (plan === "plan_6") price = 3990
-    if (plan === "plan_12") price = 6990
+            users[session.id] = userId
 
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "eur",
-            product_data: {
-              name: "VIP Telegram Access"
-            },
-            unit_amount: price
-          },
-          quantity: 1
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                chat_id: chatId,
+                text: `💳 Pague aqui:\n${session.url}`
+            })
         }
-      ],
-      mode: "payment",
-      success_url: "https://t.me",
-      cancel_url: "https://t.me"
-    })
+    }
 
-    users[session.id] = userId
-
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: chatId,
-      text: `💳 Pague aqui:\n${session.url}`
-    })
-
-  }
-
-  res.sendStatus(200)
-
+    res.sendStatus(200)
 })
 
 app.post("/webhook", async (req, res) => {
 
-  const event = req.body
+    const event = req.body
 
-  if (event.type === "checkout.session.completed") {
+    if (event.type === "checkout.session.completed") {
 
-    const session = event.data.object
-    const userId = users[session.id]
+        const session = event.data.object
+        const userId = users[session.id]
 
-    if (userId) {
+        if (userId) {
 
-      const invite = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/createChatInviteLink`, {
-        chat_id: GROUP_ID,
-        member_limit: 1
-      })
+            const response = await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/createChatInviteLink`, {
+                chat_id: GROUP_ID,
+                member_limit: 1
+            })
 
-      const inviteLink = invite.data.result.invite_link
+            const inviteLink = response.data.result.invite_link
 
-      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        chat_id: userId,
-        text: `🔓 Pagamento confirmado!\n\nEntre no grupo VIP:\n${inviteLink}`
-      })
-
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                chat_id: userId,
+                text: `🔓 Acesso liberado!\n\nEntre no grupo VIP:\n${inviteLink}`
+            })
+        }
     }
 
-  }
-
-  res.sendStatus(200)
-
+    res.sendStatus(200)
 })
 
 app.listen(PORT, () => {
-  console.log("Server running on port " + PORT)
+    console.log("Server running on port " + PORT)
 })
