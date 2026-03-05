@@ -20,14 +20,13 @@ app.get("/", (req, res) => {
 
 app.post("/telegram", async (req, res) => {
 
-    const message = req.body.message
-    const callback = req.body.callback_query
+    const body = req.body
 
-    // COMANDO /start
-    if (message) {
+    // mensagem normal
+    if (body.message) {
 
-        const chatId = message.chat.id
-        const text = message.text
+        const chatId = body.message.chat.id
+        const text = body.message.text
 
         if (text === "/start") {
 
@@ -45,14 +44,21 @@ app.post("/telegram", async (req, res) => {
                     ]
                 }
             })
+
         }
+
     }
 
-    // BOTÃO CLICADO
-    if (callback) {
+    // clique no botão
+    if (body.callback_query) {
 
+        const callback = body.callback_query
         const userId = callback.from.id
         const chatId = callback.message.chat.id
+
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
+            callback_query_id: callback.id
+        })
 
         if (callback.data === "buy_vip") {
 
@@ -81,10 +87,13 @@ app.post("/telegram", async (req, res) => {
                 chat_id: chatId,
                 text: `💳 Pague aqui:\n${session.url}`
             })
+
         }
+
     }
 
     res.sendStatus(200)
+
 })
 
 app.post("/webhook", async (req, res) => {
@@ -109,10 +118,13 @@ app.post("/webhook", async (req, res) => {
                 chat_id: userId,
                 text: `🔓 Acesso liberado!\n\nEntre no grupo VIP:\n${inviteLink}`
             })
+
         }
+
     }
 
     res.sendStatus(200)
+
 })
 
 app.listen(PORT, () => {
