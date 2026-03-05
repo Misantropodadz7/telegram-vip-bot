@@ -24,6 +24,7 @@ app.post("/telegram", async (req, res) => {
 
         const body = req.body
 
+        // Mensagem normal
         if (body.message) {
 
             const chatId = body.message.chat.id
@@ -45,10 +46,12 @@ app.post("/telegram", async (req, res) => {
 
         }
 
+        // Clique no botão
         if (body.callback_query) {
 
             const callback = body.callback_query
             const chatId = callback.message.chat.id
+            const userId = callback.from.id
 
             await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
                 callback_query_id: callback.id
@@ -57,6 +60,35 @@ app.post("/telegram", async (req, res) => {
             await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
                 chat_id: chatId,
                 text: "Gerando pagamento..."
+            })
+
+            // Criar sessão de pagamento Stripe
+            const session = await stripe.checkout.sessions.create({
+                payment_method_types: ["card"],
+                line_items: [
+                    {
+                        price_data: {
+                            currency: "eur",
+                            product_data: {
+                                name: "VIP Telegram"
+                            },
+                            unit_amount: 990
+                        },
+                        quantity: 1
+                    }
+                ],
+                mode: "payment",
+                success_url: "https://t.me",
+                cancel_url: "https://t.me"
+            })
+
+            // salvar usuário
+            users[session.id] = userId
+
+            // enviar link de pagamento
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                chat_id: chatId,
+                text: `💳 Pague aqui:\n${session.url}`
             })
 
         }
@@ -71,6 +103,7 @@ app.post("/telegram", async (req, res) => {
     }
 
 })
+
 app.post("/webhook", async (req, res) => {
 
     const event = req.body
@@ -91,7 +124,7 @@ app.post("/webhook", async (req, res) => {
 
             await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
                 chat_id: userId,
-                text: `🔓 Acesso liberado!\n\nEntre no grupo VIP:\n${inviteLink}`
+                text: `🔓 Pagamento confirmado!\n\nEntre no grupo VIP:\n${inviteLink}`
             })
 
         }
@@ -105,4 +138,3 @@ app.post("/webhook", async (req, res) => {
 app.listen(PORT, () => {
     console.log("Server running on port " + PORT)
 })
-
