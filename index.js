@@ -57,9 +57,9 @@ app.post("/telegram", async (req, res) => {
         text: "💎 Escolha seu plano VIP:",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "⭐ Mensal - R$ 20,00", callback_data: "buy_monthly" }],
-            [{ text: "🗓️ Trimestral - R$ 50,00", callback_data: "buy_quarterly" }],
-            [{ text: "☀️ Semestral - R$ 90,00", callback_data: "buy_semiannual" }]
+            [{ text: "⭐ Mensal - € 7,99", callback_data: "buy_monthly" }],
+            [{ text: "🗓️ Trimestral - € 20,99", callback_data: "buy_quarterly" }],
+            [{ text: "☀️ Semestral - € 36,99", callback_data: "buy_semiannual" }]
 
           ]
         }
@@ -88,6 +88,7 @@ app.post("/telegram", async (req, res) => {
           {
             // Use o Price ID do produto recorrente criado no Stripe Dashboard
             price: process.env.STRIPE_PRICE_MONTHLY, // ex: price_1ABC123...
+            currency: "eur", // ✅ Moeda alterada para EUR
             quantity: 1
           }
         ],
@@ -123,6 +124,7 @@ app.post("/telegram", async (req, res) => {
         line_items: [
           {
             price: process.env.STRIPE_PRICE_QUARTERLY, // ex: price_1QRT...
+            currency: "eur", // ✅ Moeda alterada para EUR
             quantity: 1
           }
         ],
@@ -158,6 +160,7 @@ app.post("/telegram", async (req, res) => {
         line_items: [
           {
             price: process.env.STRIPE_PRICE_SEMIANNUAL, // ex: price_1SEM...
+            currency: "eur", // ✅ Moeda alterada para EUR
             quantity: 1
           }
         ],
