@@ -59,8 +59,8 @@ app.post("/telegram", async (req, res) => {
           inline_keyboard: [
             [{ text: "⭐ Mensal - R$ 20,00", callback_data: "buy_monthly" }],
             [{ text: "🗓️ Trimestral - R$ 50,00", callback_data: "buy_quarterly" }],
-            [{ text: "☀️ Semestral - R$ 90,00", callback_data: "buy_semiannual" }],
-            [{ text: "🏆 Anual - R$ 150,00", callback_data: "buy_yearly" }]
+            [{ text: "☀️ Semestral - R$ 90,00", callback_data: "buy_semiannual" }]
+
           ]
         }
       })
@@ -175,41 +175,6 @@ app.post("/telegram", async (req, res) => {
       })
     }
 
-    // BOTÃO: COMPRAR PLANO ANUAL
-    if (callback && callback.data === "buy_yearly") {
-      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-        callback_query_id: callback.id
-      })
-
-      const chatId = callback.message.chat.id
-
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: "⏳ Gerando link de pagamento..."
-      })
-
-      // ⚠️ Substitua "price_SEU_PRICE_ID_ANUAL" pelo Price ID criado no Stripe Dashboard
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [
-          {
-            price: process.env.STRIPE_PRICE_YEARLY, // ex: price_1XYZ456...
-            quantity: 1
-          }
-        ],
-        mode: "subscription",
-        metadata: {
-          telegram_chat_id: String(chatId)
-        },
-        success_url: "https://t.me/ManuBelluccibot",
-        cancel_url: "https://t.me/ManuBelluccibot"
-      })
-
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
-      })
-    }
 
     res.sendStatus(200)
   } catch (error) {
@@ -220,7 +185,6 @@ app.post("/telegram", async (req, res) => {
 
 // ─────────────────────────────────────────
 // ENDPOINT DO WEBHOOK DO STRIPE
-// CORREÇÃO 4: Endpoint separado para receber confirmações de pagamento do Stripe
 // ─────────────────────────────────────────
 app.post("/stripe-webhook", async (req, res) => {
   const sig = req.headers["stripe-signature"]
@@ -239,11 +203,16 @@ app.post("/stripe-webhook", async (req, res) => {
   if (event.type === "checkout.session.completed") {
     const session = event.data.object
 
-    // Recupera o chat_id salvo nos metadata
+    // Recupera o chat_id salvo nos metadata da sessão
     const chatId = session.metadata?.telegram_chat_id
 
     if (chatId) {
       try {
+        // Atualiza o metadata do Customer com o chat_id para uso futuro (ex: remoção)
+        await stripe.customers.update(session.customer, {
+          metadata: { telegram_chat_id: chatId }
+        })
+
         // ✅ Gera um link de convite único para o grupo
         const inviteResponse = await axios.post(
           `${TELEGRAM_API}/createChatInviteLink`,
@@ -261,7 +230,36 @@ app.post("/stripe-webhook", async (req, res) => {
           text: `✅ Pagamento confirmado! Bem-vindo ao VIP!\n\n🔗 Entre pelo link abaixo (válido por 24h):\n${inviteLink}`
         })
       } catch (err) {
-        console.error("Erro ao gerar invite link:", err.message)
+        console.error("Erro ao gerar invite link ou atualizar customer metadata:", err.message)
+      }
+    }
+  }
+
+  // Assinatura cancelada ou deletada
+  if (event.type === "customer.subscription.deleted" || event.type === "customer.subscription.updated") {
+    const subscription = event.data.object
+
+    // Se a assinatura foi cancelada ou está em um status que não permite acesso
+    if (subscription.status === "canceled" || subscription.status === "unpaid" || subscription.status === "past_due") {
+      const customerId = subscription.customer
+      const customer = await stripe.customers.retrieve(customerId)
+      const chatId = customer.metadata?.telegram_chat_id
+
+      if (chatId) {
+        try {
+          // ✅ Remove (bane) o usuário do grupo
+          await axios.post(`${TELEGRAM_API}/banChatMember`, {
+            chat_id: GROUP_ID,
+            user_id: chatId // user_id é o mesmo que chat_id para usuários individuais
+          })
+
+          await axios.post(`${TELEGRAM_API}/sendMessage`, {
+            chat_id: chatId,
+            text: `❌ Sua assinatura VIP foi ${subscription.status === "canceled" ? "cancelada" : "encerrada"}. Você foi removido do grupo VIP.`
+          })
+        } catch (err) {
+          console.error("Erro ao remover usuário do grupo:", err.message)
+        }
       }
     }
   }
