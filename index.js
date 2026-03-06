@@ -58,6 +58,8 @@ app.post("/telegram", async (req, res) => {
         reply_markup: {
           inline_keyboard: [
             [{ text: "⭐ Mensal - R$ 20,00", callback_data: "buy_monthly" }],
+            [{ text: "🗓️ Trimestral - R$ 50,00", callback_data: "buy_quarterly" }],
+            [{ text: "☀️ Semestral - R$ 90,00", callback_data: "buy_semiannual" }],
             [{ text: "🏆 Anual - R$ 150,00", callback_data: "buy_yearly" }]
           ]
         }
@@ -92,6 +94,76 @@ app.post("/telegram", async (req, res) => {
         mode: "subscription", // ✅ Assinatura recorrente
         metadata: {
           telegram_chat_id: String(chatId) // ✅ Salva o chat_id para usar no webhook
+        },
+        success_url: "https://t.me/ManuBelluccibot",
+        cancel_url: "https://t.me/ManuBelluccibot"
+      })
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
+      })
+    }
+
+    // BOTÃO: COMPRAR PLANO TRIMESTRAL
+    if (callback && callback.data === "buy_quarterly") {
+      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+        callback_query_id: callback.id
+      })
+
+      const chatId = callback.message.chat.id
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: "⏳ Gerando link de pagamento..."
+      })
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            price: process.env.STRIPE_PRICE_QUARTERLY, // ex: price_1QRT...
+            quantity: 1
+          }
+        ],
+        mode: "subscription",
+        metadata: {
+          telegram_chat_id: String(chatId)
+        },
+        success_url: "https://t.me/ManuBelluccibot",
+        cancel_url: "https://t.me/ManuBelluccibot"
+      })
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
+      })
+    }
+
+    // BOTÃO: COMPRAR PLANO SEMESTRAL
+    if (callback && callback.data === "buy_semiannual") {
+      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+        callback_query_id: callback.id
+      })
+
+      const chatId = callback.message.chat.id
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: "⏳ Gerando link de pagamento..."
+      })
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            price: process.env.STRIPE_PRICE_SEMIANNUAL, // ex: price_1SEM...
+            quantity: 1
+          }
+        ],
+        mode: "subscription",
+        metadata: {
+          telegram_chat_id: String(chatId)
         },
         success_url: "https://t.me/ManuBelluccibot",
         cancel_url: "https://t.me/ManuBelluccibot"
