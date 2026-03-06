@@ -8,7 +8,17 @@ const app = express()
 const PORT = process.env.PORT || 8080
 const BOT_TOKEN = process.env.BOT_TOKEN
 const GROUP_ID = process.env.GROUP_ID
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2023-10-16", // Versão da API do Stripe
+  timeout: 20000, // Timeout de 20 segundos para as requisições
+  maxNetworkRetries: 2 // Tentar novamente até 2 vezes em caso de falha de rede
+});
+
+// ✅ Verificação inicial das variáveis de ambiente
+if (!process.env.BOT_TOKEN || !process.env.STRIPE_SECRET_KEY || !process.env.GROUP_ID) {
+  console.error("ERRO: Variáveis de ambiente essenciais (BOT_TOKEN, STRIPE_SECRET_KEY, GROUP_ID) não foram definidas.");
+  process.exit(1); // Encerra o processo se as chaves não estiverem presentes
+}
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET // Adicione esta variável no Railway
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
