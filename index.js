@@ -2,17 +2,20 @@ const express = require("express")
 const bodyParser = require("body-parser")
 const axios = require("axios")
 const Stripe = require("stripe")
-const https = require('https'); // Necessário para configurar o agente HTTPS
+const https = require("https" ); // Necessário para configurar o agente HTTPS
 
 const app = express()
 const PORT = process.env.PORT || 8080
 const BOT_TOKEN = process.env.BOT_TOKEN
 const GROUP_ID = process.env.GROUP_ID
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET
+
+// ✅ Limpa espaços/caracteres invisíveis das chaves
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY ? process.env.STRIPE_SECRET_KEY.trim() : '';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET ? process.env.STRIPE_WEBHOOK_SECRET.trim() : '';
+
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
-// ✅ Configuração da biblioteca Stripe para Webhooks (não afeta a criação de sessão)
+// ✅ Configuração da biblioteca Stripe para Webhooks (não afeta a criação de sessão )
 const stripe = new Stripe(STRIPE_SECRET_KEY, {
   apiVersion: "2023-10-16",
 });
@@ -25,7 +28,7 @@ const stripeAxios = axios.create({
     "Content-Type": "application/x-www-form-urlencoded"
   },
   timeout: 40000, // Timeout de 40 segundos
-  httpsAgent: new https.Agent({ rejectUnauthorized: false }) // Ignora erros de certificado (para ambientes restritos)
+  httpsAgent: new https.Agent({ rejectUnauthorized: false } ) // Ignora erros de certificado (para ambientes restritos)
 });
 
 // ✅ Verificação inicial das variáveis de ambiente
@@ -98,7 +101,7 @@ app.post("/telegram", async (req, res) => {
             "metadata[telegram_chat_id]": String(chatId),
             "success_url": "https://t.me/ManuBelluccibot",
             "cancel_url": "https://t.me/ManuBelluccibot"
-          }).toString()
+          } ).toString()
         );
         const session = response.data;
 
@@ -191,4 +194,3 @@ app.post("/stripe-webhook", async (req, res) => {
 })
 
 app.listen(PORT, () => console.log("Server running on port " + PORT))
-
