@@ -82,27 +82,35 @@ app.post("/telegram", async (req, res) => {
       // CORREÇÃO 2: Usar mode: "subscription" para assinatura recorrente
       // CORREÇÃO 3: Salvar o chat_id nos metadata para usar no webhook
       // ⚠️ Substitua "price_SEU_PRICE_ID_MENSAL" pelo Price ID criado no Stripe Dashboard
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [
-          {
-            // Use o Price ID do produto recorrente criado no Stripe Dashboard
-            price: process.env.STRIPE_PRICE_MONTHLY, // ex: price_1ABC123...
-            quantity: 1
-          }
-        ],
-        mode: "subscription", // ✅ Assinatura recorrente
-        metadata: {
-          telegram_chat_id: String(chatId) // ✅ Salva o chat_id para usar no webhook
-        },
-        success_url: "https://t.me/ManuBelluccibot",
-        cancel_url: "https://t.me/ManuBelluccibot"
-      })
+      try {
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              // Use o Price ID do produto recorrente criado no Stripe Dashboard
+              price: process.env.STRIPE_PRICE_MONTHLY, // ex: price_1ABC123...
+              quantity: 1
+            }
+          ],
+          mode: "subscription", // ✅ Assinatura recorrente
+          metadata: {
+            telegram_chat_id: String(chatId) // ✅ Salva o chat_id para usar no webhook
+          },
+          success_url: "https://t.me/ManuBelluccibot",
+          cancel_url: "https://t.me/ManuBelluccibot"
+        })
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
-      })
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
+        })
+      } catch (stripeError) {
+        console.error("Erro ao criar sessão de checkout (Mensal):", stripeError.message)
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `❌ Erro ao gerar o link de pagamento (Mensal). Por favor, tente novamente mais tarde. Detalhes: ${stripeError.message}`
+        })
+      }
     }
 
     // BOTÃO: COMPRAR PLANO TRIMESTRAL
@@ -118,26 +126,34 @@ app.post("/telegram", async (req, res) => {
         text: "⏳ Gerando link de pagamento..."
       })
 
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [
-          {
-            price: process.env.STRIPE_PRICE_QUARTERLY, // ex: price_1QRT...
-            quantity: 1
-          }
-        ],
-        mode: "subscription",
-        metadata: {
-          telegram_chat_id: String(chatId)
-        },
-        success_url: "https://t.me/ManuBelluccibot",
-        cancel_url: "https://t.me/ManuBelluccibot"
-      })
+      try {
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price: process.env.STRIPE_PRICE_QUARTERLY, // ex: price_1QRT...
+              quantity: 1
+            }
+          ],
+          mode: "subscription",
+          metadata: {
+            telegram_chat_id: String(chatId)
+          },
+          success_url: "https://t.me/ManuBelluccibot",
+          cancel_url: "https://t.me/ManuBelluccibot"
+        })
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
-      })
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
+        })
+      } catch (stripeError) {
+        console.error("Erro ao criar sessão de checkout (Trimestral):", stripeError.message)
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `❌ Erro ao gerar o link de pagamento (Trimestral). Por favor, tente novamente mais tarde. Detalhes: ${stripeError.message}`
+        })
+      }
     }
 
     // BOTÃO: COMPRAR PLANO SEMESTRAL
@@ -153,26 +169,34 @@ app.post("/telegram", async (req, res) => {
         text: "⏳ Gerando link de pagamento..."
       })
 
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [
-          {
-            price: process.env.STRIPE_PRICE_SEMIANNUAL, // ex: price_1SEM...
-            quantity: 1
-          }
-        ],
-        mode: "subscription",
-        metadata: {
-          telegram_chat_id: String(chatId)
-        },
-        success_url: "https://t.me/ManuBelluccibot",
-        cancel_url: "https://t.me/ManuBelluccibot"
-      })
+      try {
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price: process.env.STRIPE_PRICE_SEMIANNUAL, // ex: price_1SEM...
+              quantity: 1
+            }
+          ],
+          mode: "subscription",
+          metadata: {
+            telegram_chat_id: String(chatId)
+          },
+          success_url: "https://t.me/ManuBelluccibot",
+          cancel_url: "https://t.me/ManuBelluccibot"
+        })
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
-      })
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
+        })
+      } catch (stripeError) {
+        console.error("Erro ao criar sessão de checkout (Semestral):", stripeError.message)
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: `❌ Erro ao gerar o link de pagamento (Semestral). Por favor, tente novamente mais tarde. Detalhes: ${stripeError.message}`
+        })
+      }
     }
 
 
