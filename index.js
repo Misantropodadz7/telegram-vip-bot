@@ -5,22 +5,26 @@ const Stripe = require("stripe")
 
 const app = express()
 
-const PORT = process.env.PORT || 8080
-const BOT_TOKEN = process.env.BOT_TOKEN
-const GROUP_ID = process.env.GROUP_ID
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2023-10-16", // Versão da API do Stripe
-  timeout: 20000, // Timeout de 20 segundos para as requisições
-  maxNetworkRetries: 2 // Tentar novamente até 2 vezes em caso de falha de rede
+  apiVersion: "2023-10-16",
+  timeout: 20000,
+  maxNetworkRetries: 2
 });
 
-// ✅ Verificação inicial das variáveis de ambiente
-if (!process.env.BOT_TOKEN || !process.env.STRIPE_SECRET_KEY || !process.env.GROUP_ID) {
-  console.error("ERRO: Variáveis de ambiente essenciais (BOT_TOKEN, STRIPE_SECRET_KEY, GROUP_ID) não foram definidas.");
-  process.exit(1); // Encerra o processo se as chaves não estiverem presentes
+// ✅ TESTE DE CONEXÃO AO INICIAR
+async function testarConexao() {
+  console.log("--- TESTANDO CONEXÃO COM STRIPE ---");
+  try {
+    const p = await stripe.products.list({ limit: 1 });
+    console.log("✅ CONEXÃO OK! Stripe respondeu corretamente.");
+  } catch (e) {
+    console.log("❌ ERRO DE CONEXÃO: " + e.message);
+  }
 }
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET // Adicione esta variável no Railway
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
+testarConexao();
+
+// ... resto do seu código (BOT_TOKEN, GROUP_ID, rotas, etc)
+
 
 // ⚠️ IMPORTANTE: O endpoint do webhook do Stripe precisa do body RAW (não JSON parseado)
 // Por isso, o bodyParser.raw() é aplicado ANTES do bodyParser.json()
@@ -307,3 +311,4 @@ app.post("/stripe-webhook", async (req, res) => {
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT)
 })
+
