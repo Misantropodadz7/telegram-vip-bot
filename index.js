@@ -88,7 +88,6 @@ app.post("/telegram", async (req, res) => {
           {
             // Use o Price ID do produto recorrente criado no Stripe Dashboard
             price: process.env.STRIPE_PRICE_MONTHLY, // ex: price_1ABC123...
-            currency: "eur", // ✅ Moeda alterada para EUR
             quantity: 1
           }
         ],
@@ -124,7 +123,6 @@ app.post("/telegram", async (req, res) => {
         line_items: [
           {
             price: process.env.STRIPE_PRICE_QUARTERLY, // ex: price_1QRT...
-            currency: "eur", // ✅ Moeda alterada para EUR
             quantity: 1
           }
         ],
@@ -160,7 +158,6 @@ app.post("/telegram", async (req, res) => {
         line_items: [
           {
             price: process.env.STRIPE_PRICE_SEMIANNUAL, // ex: price_1SEM...
-            currency: "eur", // ✅ Moeda alterada para EUR
             quantity: 1
           }
         ],
