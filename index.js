@@ -4,26 +4,43 @@ const axios = require("axios")
 const Stripe = require("stripe")
 
 const app = express()
+const PORT = process.env.PORT || 8080
+const BOT_TOKEN = process.env.BOT_TOKEN
+const GROUP_ID = process.env.GROUP_ID
 
+// ✅ Configuração Robusta do Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2023-10-16",
-  timeout: 20000,
-  maxNetworkRetries: 2
+  timeout: 30000, // Aumentado para 30s para evitar quedas de rede
+  maxNetworkRetries: 3 // Aumentado para 3 tentativas
 });
 
-// ✅ TESTE DE CONEXÃO AO INICIAR
-async function testarConexao() {
-  console.log("--- TESTANDO CONEXÃO COM STRIPE ---");
+// ✅ TESTE DE CONEXÃO IMEDIATO (Ver nos logs do Railway)
+async function verificarStripe() {
+  console.log("--- INICIANDO TESTE DE CONEXÃO COM STRIPE ---");
   try {
     const p = await stripe.products.list({ limit: 1 });
-    console.log("✅ CONEXÃO OK! Stripe respondeu corretamente.");
+    console.log("✅ SUCESSO: Conexão com Stripe estabelecida!");
   } catch (e) {
-    console.log("❌ ERRO DE CONEXÃO: " + e.message);
+    console.log("❌ ERRO CRÍTICO DE CONEXÃO: " + e.message);
+    if (e.message.includes("api.stripe.com")) {
+      console.log("👉 DICA: O servidor não está conseguindo alcançar o domínio do Stripe. Verifique o DNS ou Firewall do Railway.");
+    }
   }
 }
-testarConexao();
+verificarStripe();
 
-// ... resto do seu código (BOT_TOKEN, GROUP_ID, rotas, etc)
+// ✅ Verificação de Variáveis
+if (!process.env.BOT_TOKEN || !process.env.STRIPE_SECRET_KEY || !process.env.GROUP_ID) {
+  console.error("ERRO: Variáveis essenciais não definidas no Railway.");
+  process.exit(1);
+}
+
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
+
+// ... continue com o resto do seu código (app.use, app.post, etc )
+
 
 
 // ⚠️ IMPORTANTE: O endpoint do webhook do Stripe precisa do body RAW (não JSON parseado)
@@ -311,4 +328,5 @@ app.post("/stripe-webhook", async (req, res) => {
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT)
 })
+
 
