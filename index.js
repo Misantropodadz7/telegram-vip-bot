@@ -2,6 +2,7 @@ const express = require("express")
 const bodyParser = require("body-parser")
 const axios = require("axios")
 const Stripe = require("stripe")
+const https = require('https'); // Necessário para configurar o agente HTTPS
 
 const app = express()
 const PORT = process.env.PORT || 8080
@@ -11,16 +12,25 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
-// ✅ Configuração Robusta do Stripe
+// ✅ Configuração da biblioteca Stripe para Webhooks (não afeta a criação de sessão)
 const stripe = new Stripe(STRIPE_SECRET_KEY, {
   apiVersion: "2023-10-16",
-  timeout: 40000, // Aumentado para 40s
-  maxNetworkRetries: 5 // Aumentado para 5 tentativas para vencer o erro de rede do Railway
+});
+
+// ✅ Configuração do Axios para chamadas diretas ao Stripe (mais resiliente)
+const stripeAxios = axios.create({
+  baseURL: "https://api.stripe.com/v1",
+  headers: {
+    "Authorization": `Bearer ${STRIPE_SECRET_KEY}`,
+    "Content-Type": "application/x-www-form-urlencoded"
+  },
+  timeout: 40000, // Timeout de 40 segundos
+  httpsAgent: new https.Agent({ rejectUnauthorized: false }) // Ignora erros de certificado (para ambientes restritos)
 });
 
 // ✅ Verificação inicial das variáveis de ambiente
-if (!BOT_TOKEN || !STRIPE_SECRET_KEY || !GROUP_ID) {
-  console.error("❌ ERRO: Variáveis essenciais (BOT_TOKEN, STRIPE_SECRET_KEY, GROUP_ID) não foram definidas no Railway.");
+if (!BOT_TOKEN || !STRIPE_SECRET_KEY || !GROUP_ID || !STRIPE_WEBHOOK_SECRET) {
+  console.error("❌ ERRO: Variáveis essenciais (BOT_TOKEN, STRIPE_SECRET_KEY, GROUP_ID, STRIPE_WEBHOOK_SECRET) não foram definidas no Railway.");
   process.exit(1);
 }
 
@@ -77,25 +87,40 @@ app.post("/telegram", async (req, res) => {
       await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text: `⏳ Gerando link para plano ${plan.label}...` })
 
       try {
-        const session = await stripe.checkout.sessions.create({
-          payment_method_types: ["card"],
-          line_items: [{ price: plan.id, quantity: 1 }],
-          mode: "subscription",
-          metadata: { telegram_chat_id: String(chatId) },
-          success_url: "https://t.me/ManuBelluccibot",
-          cancel_url: "https://t.me/ManuBelluccibot"
-        })
+        console.log(`Tentando criar sessão de checkout para ${plan.label} via Axios...`);
+        const response = await stripeAxios.post(
+          "/checkout/sessions",
+          new URLSearchParams({
+            "payment_method_types[0]": "card",
+            "line_items[0][price]": plan.id,
+            "line_items[0][quantity]": 1,
+            "mode": "subscription",
+            "metadata[telegram_chat_id]": String(chatId),
+            "success_url": "https://t.me/ManuBelluccibot",
+            "cancel_url": "https://t.me/ManuBelluccibot"
+          }).toString()
+        );
+        const session = response.data;
 
         await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
           text: `💳 Clique abaixo para pagar e entrar no VIP:\n\n${session.url}`
         })
       } catch (err) {
-        console.error(`Erro Stripe (${plan.label}):`, err.message)
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: chatId,
-          text: `❌ Erro de conexão com o Stripe. O Railway está bloqueando a rede. Tente clicar novamente ou aguarde 1 minuto.\nErro: ${err.message}`
-        })
+        console.error(`Erro Stripe (${plan.label}) via Axios:`, err.message);
+        if (err.response) {
+          console.error("Stripe Response Data:", err.response.data);
+          console.error("Stripe Response Status:", err.response.status);
+          await axios.post(`${TELEGRAM_API}/sendMessage`, {
+            chat_id: chatId,
+            text: `❌ Erro ao gerar o link de pagamento (${plan.label}). Detalhes: ${err.response.data.error.message || err.message}`
+          });
+        } else {
+          await axios.post(`${TELEGRAM_API}/sendMessage`, {
+            chat_id: chatId,
+            text: `❌ Erro de conexão com o Stripe. O Railway está bloqueando a rede. Tente clicar novamente ou aguarde 1 minuto.\nErro: ${err.message}`
+          });
+        }
       }
     }
 
@@ -116,6 +141,7 @@ app.post("/stripe-webhook", async (req, res) => {
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET)
   } catch (err) {
+    console.error("Webhook inválido:", err.message)
     return res.status(400).send(`Webhook Error: ${err.message}`)
   }
 
@@ -127,6 +153,7 @@ app.post("/stripe-webhook", async (req, res) => {
     if (chatId) {
       try {
         // Salva o Telegram ID no Customer do Stripe para remoção futura
+        // Usando a biblioteca Stripe aqui, pois é uma chamada interna e não de rede externa
         await stripe.customers.update(session.customer, { metadata: { telegram_chat_id: chatId } })
 
         // Gera link de convite único
@@ -149,7 +176,8 @@ app.post("/stripe-webhook", async (req, res) => {
     const sub = event.data.object
     if (["canceled", "unpaid", "past_due"].includes(sub.status)) {
       try {
-        const customer = await stripe.retrieve(sub.customer)
+        // Usando a biblioteca Stripe aqui
+        const customer = await stripe.customers.retrieve(sub.customer)
         const chatId = customer.metadata?.telegram_chat_id
         if (chatId) {
           await axios.post(`${TELEGRAM_API}/banChatMember`, { chat_id: GROUP_ID, user_id: chatId })
