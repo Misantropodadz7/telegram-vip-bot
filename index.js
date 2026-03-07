@@ -24,7 +24,7 @@ const HUBLA_LINK_INT_SEMIANNUAL = process.env.HUBLA_LINK_INT_SEMIANNUAL ? proces
 const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL ? process.env.PRIVACY_PROFILE_URL.trim() : "";
 
 // ✅ Variável para a chave da API de Geolocalização (se usar uma versão paga)
-const IP_API_KEY = process.env.IP_API_KEY || "; // O ip-api.com funciona sem chave para uso básico
+const IP_API_KEY = process.env.IP_API_KEY || "; // O ip-api.com funciona sem chave para uso básico"
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
@@ -173,4 +173,5 @@ app.post("/telegram", async (req, res) => {
 
 app.listen(PORT, () => console.log("Server running on port " + PORT))
 app.listen(PORT, () => console.log("Server running on port " + PORT))
+
 
