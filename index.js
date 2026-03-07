@@ -10,9 +10,6 @@ const BOT_TOKEN = process.env.BOT_TOKEN
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
 // ENV
-const GROUP_ID_BR = process.env.GROUP_ID_BR
-const GROUP_ID_INT = process.env.GROUP_ID_INT
-
 const HUBLA_LINK_BR_MONTHLY = process.env.HUBLA_LINK_BR_MONTHLY?.trim() || ""
 const HUBLA_LINK_BR_QUARTERLY = process.env.HUBLA_LINK_BR_QUARTERLY?.trim() || ""
 const HUBLA_LINK_BR_SEMIANNUAL = process.env.HUBLA_LINK_BR_SEMIANNUAL?.trim() || ""
@@ -35,12 +32,46 @@ function generateToken() {
   return crypto.randomBytes(16).toString("hex")
 }
 
+// pegar IP real (corrigido para Railway)
+function getUserIp(req) {
+
+  const forwarded = req.headers["x-forwarded-for"]
+
+  if (forwarded) {
+    return forwarded.split(",")[0].trim()
+  }
+
+  return req.socket.remoteAddress
+}
+
+// geolocalização
+async function checkGeolocation(ip) {
+
+  try {
+
+    const url =
+      `http://ip-api.com/json/${ip}?fields=countryCode,proxy,hosting` +
+      (IP_API_KEY ? `&key=${IP_API_KEY}` : "")
+
+    const response = await axios.get(url)
+
+    return response.data
+
+  } catch (err) {
+
+    console.log("Erro IP API:", err.message)
+
+    return null
+  }
+}
+
 // configuração planos
 const plansConfig = {
 
   br: {
     welcome_message: "✅ Clique no link para finalizar a assinatura no Hubla e entrar no VIP BRASIL:",
     allowed_country: "BR",
+
     plans: {
 
       monthly: {
@@ -67,6 +98,7 @@ const plansConfig = {
   int: {
     welcome_message: "✅ Click the link to complete your Hubla subscription and join VIP INTERNATIONAL:",
     allowed_country: null,
+
     plans: {
 
       monthly: {
@@ -90,32 +122,6 @@ const plansConfig = {
     }
   }
 
-}
-
-// pegar IP
-function getUserIp(req) {
-  return req.headers["x-forwarded-for"] || req.socket.remoteAddress
-}
-
-// geolocalização
-async function checkGeolocation(ip) {
-
-  try {
-
-    const url =
-      `http://ip-api.com/json/${ip}?fields=countryCode,proxy,hosting` +
-      (IP_API_KEY ? `&key=${IP_API_KEY}` : "")
-
-    const response = await axios.get(url)
-
-    return response.data
-
-  } catch (err) {
-
-    console.log("Erro IP API:", err.message)
-
-    return null
-  }
 }
 
 // webhook telegram
@@ -156,30 +162,20 @@ app.post("/telegram", async (req, res) => {
     if (callback && (callback.data === "show_plans_br" || callback.data === "show_plans_int")) {
 
       await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-
         callback_query_id: callback.id
-
       })
 
       const groupKey = callback.data.split("_")[2]
-
       const config = plansConfig[groupKey]
 
       const keyboard = Object.keys(config.plans).map(planKey => {
 
         const plan = config.plans[planKey]
 
-        return [
-
-          {
-
-            text: `⭐ ${plan.label} - ${plan.price_display}`,
-
-            callback_data: `buy_${groupKey}_${planKey}`
-
-          }
-
-        ]
+        return [{
+          text: `⭐ ${plan.label} - ${plan.price_display}`,
+          callback_data: `buy_${groupKey}_${planKey}`
+        }]
 
       })
 
@@ -205,21 +201,23 @@ app.post("/telegram", async (req, res) => {
       })
 
       const chatId = callback.message.chat.id
+      const userLang = callback.from.language_code
 
       const [, groupKey, planKey] = callback.data.match(buyRegex)
 
       const config = plansConfig[groupKey]
-
       const plan = config.plans[planKey]
 
-      // bloqueio geográfico
-      if (config.allowed_country) {
+      // bloqueio para BR
+      if (config.allowed_country === "BR") {
 
-        const userIp = getUserIp(req)
+        const ip = getUserIp(req)
+        const geo = await checkGeolocation(ip)
 
-        const geoData = await checkGeolocation(userIp)
+        const isBrazilIP = geo && geo.countryCode === "BR"
+        const isPortuguese = userLang === "pt-br" || userLang === "pt"
 
-        if (!geoData || geoData.countryCode !== config.allowed_country || geoData.proxy || geoData.hosting) {
+        if (!isBrazilIP && !isPortuguese) {
 
           await axios.post(`${TELEGRAM_API}/sendMessage`, {
 
@@ -230,6 +228,7 @@ app.post("/telegram", async (req, res) => {
           })
 
           return res.sendStatus(200)
+
         }
 
       }
@@ -281,7 +280,7 @@ app.post("/telegram", async (req, res) => {
 
 })
 
-// rota checkout segura
+// checkout seguro
 app.get("/checkout", (req, res) => {
 
   const { token } = req.query
