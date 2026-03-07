@@ -46,19 +46,19 @@ const plansConfig = {
       monthly: {
         link: HUBLA_LINK_BR_MONTHLY,
         label: "Mensal",
-        price_display: "R$ 39,99"
+        price_display: "R$ 29,90"
       },
 
       quarterly: {
         link: HUBLA_LINK_BR_QUARTERLY,
         label: "Trimestral",
-        price_display: "R$ 99,99"
+        price_display: "R$ 76,24"
       },
 
       semiannual: {
         link: HUBLA_LINK_BR_SEMIANNUAL,
         label: "Semestral",
-        price_display: "R$ 189,99"
+        price_display: "R$ 134,55"
       }
 
     }
@@ -313,3 +313,4 @@ app.listen(PORT, () => {
   console.log("Server running on port " + PORT)
 
 })
+
