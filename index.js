@@ -1,70 +1,60 @@
 const express = require("express")
 const bodyParser = require("body-parser")
 const axios = require("axios")
-const Stripe = require("stripe")
 const https = require("https");
 
 const app = express()
 const PORT = process.env.PORT || 8080
 const BOT_TOKEN = process.env.BOT_TOKEN
 
-// ✅ Novas variáveis para múltiplos grupos e preços
-const GROUP_ID_BR = process.env.GROUP_ID_BR
-const GROUP_ID_INT = process.env.GROUP_ID_INT
+// ✅ Variáveis para múltiplos grupos e links do Hubla
+const GROUP_ID_BR = process.env.GROUP_ID_BR // Mantido para referência, mas Hubla gerencia o acesso
+const GROUP_ID_INT = process.env.GROUP_ID_INT // Mantido para referência, mas Hubla gerencia o acesso
 
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY ? process.env.STRIPE_SECRET_KEY.trim() : "";
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET ? process.env.STRIPE_WEBHOOK_SECRET.trim() : "";
+// ✅ Links de Checkout do Hubla para cada plano
+const HUBLA_LINK_BR_MONTHLY = process.env.HUBLA_LINK_BR_MONTHLY ? process.env.HUBLA_LINK_BR_MONTHLY.trim() : "";
+const HUBLA_LINK_BR_QUARTERLY = process.env.HUBLA_LINK_BR_QUARTERLY ? process.env.HUBLA_LINK_BR_QUARTERLY.trim() : "";
+const HUBLA_LINK_BR_SEMIANNUAL = process.env.HUBLA_LINK_BR_SEMIANNUAL ? process.env.HUBLA_LINK_BR_SEMIANNUAL.trim() : "";
+
+const HUBLA_LINK_INT_MONTHLY = process.env.HUBLA_LINK_INT_MONTHLY ? process.env.HUBLA_LINK_INT_MONTHLY.trim() : "";
+const HUBLA_LINK_INT_QUARTERLY = process.env.HUBLA_LINK_INT_QUARTERLY ? process.env.HUBLA_LINK_INT_QUARTERLY.trim() : "";
+const HUBLA_LINK_INT_SEMIANNUAL = process.env.HUBLA_LINK_INT_SEMIANNUAL ? process.env.HUBLA_LINK_INT_SEMIANNUAL.trim() : "";
+
+// ✅ URL do perfil Privacy
+const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL ? process.env.PRIVACY_PROFILE_URL.trim() : "";
 
 // ✅ Variável para a chave da API de Geolocalização (se usar uma versão paga)
-const IP_API_KEY = process.env.IP_API_KEY || ''; // O ip-api.com funciona sem chave para uso básico
+const IP_API_KEY = process.env.IP_API_KEY || "; // O ip-api.com funciona sem chave para uso básico
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
-// ✅ Configuração da biblioteca Stripe para Webhooks
-const stripe = new Stripe(STRIPE_SECRET_KEY, {
-  apiVersion: "2023-10-16",
-});
-
-// ✅ Configuração do Axios para chamadas diretas ao Stripe (mais resiliente)
-const stripeAxios = axios.create({
-  baseURL: "https://api.stripe.com/v1",
-  headers: {
-    "Authorization": `Bearer ${STRIPE_SECRET_KEY}`,
-    "Content-Type": "application/x-www-form-urlencoded"
-  },
-  timeout: 40000,
-  httpsAgent: new https.Agent({ rejectUnauthorized: false })
-});
-
 // ✅ Verificação inicial das variáveis de ambiente
-if (!BOT_TOKEN || !STRIPE_SECRET_KEY || !STRIPE_WEBHOOK_SECRET || !GROUP_ID_BR || !GROUP_ID_INT) {
-  console.error("❌ ERRO: Variáveis essenciais (BOT_TOKEN, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, GROUP_ID_BR, GROUP_ID_INT) não foram definidas no Railway.");
+if (!BOT_TOKEN || !GROUP_ID_BR || !GROUP_ID_INT || !PRIVACY_PROFILE_URL ||
+    !HUBLA_LINK_BR_MONTHLY || !HUBLA_LINK_BR_QUARTERLY || !HUBLA_LINK_BR_SEMIANNUAL ||
+    !HUBLA_LINK_INT_MONTHLY || !HUBLA_LINK_INT_QUARTERLY || !HUBLA_LINK_INT_SEMIANNUAL) {
+  console.error("❌ ERRO: Variáveis essenciais (BOT_TOKEN, GROUP_ID_BR, GROUP_ID_INT, PRIVACY_PROFILE_URL, e todos os links do Hubla) não foram definidas no Railway.");
   process.exit(1);
 }
 
-// ✅ Mapeamento de planos e grupos
+// ✅ Mapeamento de planos e grupos (agora com links do Hubla)
 const plansConfig = {
   "br": {
-    group_id: GROUP_ID_BR,
-    currency_symbol: "R$",
-    welcome_message: "✅ Pagamento confirmado! Entre no VIP BRASIL pelo link único:",
-    removed_message: "❌ Sua assinatura VIP BRASIL expirou e você foi removido do grupo.",
+    group_id: GROUP_ID_BR, // Mantido para referência e para a lógica de geolocalização
+    welcome_message: "✅ Clique no link para finalizar a assinatura no Hubla e entrar no VIP BRASIL:",
     plans: {
-      "monthly": { id: process.env.STRIPE_PRICE_BR_MONTHLY, label: "Mensal", price_display: "R$ 39,99" },
-      "quarterly": { id: process.env.STRIPE_PRICE_BR_QUARTERLY, label: "Trimestral", price_display: "R$ 99,99" },
-      "semiannual": { id: process.env.STRIPE_PRICE_BR_SEMIANNUAL, label: "Semestral", price_display: "R$ 189,99" }
+      "monthly": { link: HUBLA_LINK_BR_MONTHLY, label: "Mensal", price_display: "R$ 39,99" },
+      "quarterly": { link: HUBLA_LINK_BR_QUARTERLY, label: "Trimestral", price_display: "R$ 99,99" },
+      "semiannual": { link: HUBLA_LINK_BR_SEMIANNUAL, label: "Semestral", price_display: "R$ 189,99" }
     },
     allowed_country: "BR" // ✅ País permitido para este grupo
   },
   "int": {
-    group_id: GROUP_ID_INT,
-    currency_symbol: "€",
-    welcome_message: "✅ Payment confirmed! Join VIP INTERNATIONAL via this unique link:",
-    removed_message: "❌ Your VIP INTERNATIONAL subscription has expired and you have been removed from the group.",
+    group_id: GROUP_ID_INT, // Mantido para referência
+    welcome_message: "✅ Click the link to complete your Hubla subscription and join VIP INTERNATIONAL:",
     plans: {
-      "monthly": { id: process.env.STRIPE_PRICE_INT_MONTHLY, label: "Monthly", price_display: "€ 7,99" },
-      "quarterly": { id: process.env.STRIPE_PRICE_INT_QUARTERLY, label: "Quarterly", price_display: "€ 20,99" },
-      "semiannual": { id: process.env.STRIPE_PRICE_INT_SEMIANNUAL, label: "Semiannual", price_display: "€ 36,99" }
+      "monthly": { link: HUBLA_LINK_INT_MONTHLY, label: "Monthly", price_display: "€ 7,99" },
+      "quarterly": { link: HUBLA_LINK_INT_QUARTERLY, label: "Quarterly", price_display: "€ 20,99" },
+      "semiannual": { link: HUBLA_LINK_INT_SEMIANNUAL, label: "Semiannual", price_display: "€ 36,99" }
     },
     allowed_country: null // ✅ Sem restrição de país para este grupo
   }
@@ -86,9 +76,8 @@ async function checkGeolocation(ip) {
   }
 }
 
-// ⚠️ Webhook precisa do body RAW
-app.use("/stripe-webhook", bodyParser.raw({ type: "application/json" }))
 app.use(bodyParser.json())
+app.use(bodyParser.urlencoded({ extended: true }));
 
 // ─────────────────────────────────────────
 // ENDPOINT DO TELEGRAM
@@ -105,7 +94,8 @@ app.post("/telegram", async (req, res) => {
         reply_markup: {
           inline_keyboard: [
             [{ text: "🇧🇷 VIP BRASIL", callback_data: "show_plans_br" }],
-            [{ text: "🌍 VIP INTERNACIONAL", callback_data: "show_plans_int" }]
+            [{ text: "🌍 VIP INTERNACIONAL", callback_data: "show_plans_int" }],
+            [{ text: "💖 Meu Privacy", url: PRIVACY_PROFILE_URL }] // ✅ Botão Privacy
           ]
         }
       })
@@ -156,45 +146,16 @@ app.post("/telegram", async (req, res) => {
         }
       }
 
-      await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text: `⏳ Gerando link para plano ${plan.label} (${groupKey.toUpperCase()})...` })
-
-      try {
-        console.log(`Tentando criar sessão de checkout para ${plan.label} (${groupKey.toUpperCase()}) via Axios...`);
-        const response = await stripeAxios.post(
-          "/checkout/sessions",
-          new URLSearchParams({
-            "payment_method_types[0]": "card",
-            "line_items[0][price]": plan.id,
-            "line_items[0][quantity]": 1,
-            "mode": "subscription",
-            "metadata[telegram_chat_id]": String(chatId),
-            "metadata[telegram_group_id]": config.group_id, // ✅ Salva o ID do grupo no metadata
-            "success_url": "https://t.me/ManuBelluccibot", // ⚠️ Atualize para o seu bot
-            "cancel_url": "https://t.me/ManuBelluccibot" // ⚠️ Atualize para o seu bot
-          }).toString()
-        );
-        const session = response.data;
-
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: chatId,
-          text: `💳 Clique abaixo para pagar e entrar no VIP ${groupKey.toUpperCase()}:\n\n${session.url}`
-        })
-      } catch (err) {
-        console.error(`Erro Stripe (${plan.label}) via Axios:`, err.message);
-        if (err.response) {
-          console.error("Stripe Response Data:", err.response.data);
-          console.error("Stripe Response Status:", err.response.status);
-          await axios.post(`${TELEGRAM_API}/sendMessage`, {
-            chat_id: chatId,
-            text: `❌ Erro ao gerar o link de pagamento (${plan.label}). Detalhes: ${err.response.data.error.message || err.message}`
-          });
-        } else {
-          await axios.post(`${TELEGRAM_API}/sendMessage`, {
-            chat_id: chatId,
-            text: `❌ Erro de conexão com o Stripe. O Railway está bloqueando a rede. Tente clicar novamente ou aguarde 1 minuto.\nErro: ${err.message}`
-          });
+      // ✅ Redireciona para o link do Hubla
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: config.welcome_message,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: `👉 Assinar ${plan.label} ${groupKey.toUpperCase()}`, url: plan.link }]
+          ]
         }
-      }
+      })
     }
 
     res.sendStatus(200)
@@ -205,72 +166,11 @@ app.post("/telegram", async (req, res) => {
 })
 
 // ─────────────────────────────────────────
-// WEBHOOK DO STRIPE (ENTRADA E SAÍDA)
+// WEBHOOKS (REMOVIDOS - Hubla gerencia)
 // ─────────────────────────────────────────
-app.post("/stripe-webhook", async (req, res) => {
-  const sig = req.headers["stripe-signature"]
-  let event
-
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET)
-  } catch (err) {
-    console.error("Webhook inválido:", err.message)
-    return res.status(400).send(`Webhook Error: ${err.message}`)
-  }
-
-  // ✅ PAGAMENTO CONFIRMADO -> ENVIAR LINK
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object
-    const chatId = session.metadata?.telegram_chat_id
-    const targetGroupId = session.metadata?.telegram_group_id; // ✅ Pega o ID do grupo do metadata
-
-    if (chatId && targetGroupId) {
-      try {
-        // Salva o Telegram ID no Customer do Stripe para remoção futura
-        await stripe.customers.update(session.customer, { metadata: { telegram_chat_id: chatId, telegram_group_id: targetGroupId } })
-
-        // Gera link de convite único para o grupo correto
-        const invite = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
-          chat_id: targetGroupId,
-          member_limit: 1,
-          expire_date: Math.floor(Date.now() / 1000) + 86400
-        })
-
-        // Envia mensagem de boas-vindas com base no grupo
-        const groupKey = Object.keys(plansConfig).find(key => plansConfig[key].group_id === targetGroupId);
-        const welcomeMessage = groupKey ? plansConfig[groupKey].welcome_message : "✅ Pagamento confirmado! Entre no VIP pelo link único:";
-
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: chatId,
-          text: `${welcomeMessage}\n${invite.data.result.invite_link}`
-        })
-      } catch (e) { console.error("Erro no convite:", e.message) }
-    }
-  }
-
-  // ❌ ASSINATURA CANCELADA/ATRASADA -> BANIR
-  if (event.type === "customer.subscription.deleted" || event.type === "customer.subscription.updated") {
-    const sub = event.data.object
-    if (["canceled", "unpaid", "past_due"].includes(sub.status)) {
-      try {
-        const customer = await stripe.customers.retrieve(sub.customer)
-        const chatId = customer.metadata?.telegram_chat_id
-        const targetGroupId = customer.metadata?.telegram_group_id; // ✅ Pega o ID do grupo do metadata
-
-        if (chatId && targetGroupId) {
-          await axios.post(`${TELEGRAM_API}/banChatMember`, { chat_id: targetGroupId, user_id: chatId })
-          
-          // Envia mensagem de remoção com base no grupo
-          const groupKey = Object.keys(plansConfig).find(key => plansConfig[key].group_id === targetGroupId);
-          const removedMessage = groupKey ? plansConfig[groupKey].removed_message : "❌ Sua assinatura VIP expirou e você foi removido do grupo.";
-
-          await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text: removedMessage })
-        }
-      } catch (e) { console.error("Erro no banimento:", e.message) }
-    }
-  }
-
-  res.sendStatus(200)
-})
+// O Hubla gerencia a entrada e saída dos membros diretamente. 
+// Não precisamos mais de um endpoint de webhook para Stripe/CCBill aqui.
 
 app.listen(PORT, () => console.log("Server running on port " + PORT))
+app.listen(PORT, () => console.log("Server running on port " + PORT))
+
