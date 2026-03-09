@@ -37,9 +37,9 @@ const plansConfig = {
     group_id: GROUP_ID_BR,
     welcome_message: "✅ Clique no link para finalizar a assinatura e entrar no VIP BRASIL:",
     plans: {
-      "monthly": { label: "Mensal", price_display: "R$ 39,99", cryptomus_amount: "39.99", cryptomus_currency: "BRL" },
-      "quarterly": { label: "Trimestral", price_display: "R$ 99,99", cryptomus_amount: "99.99", cryptomus_currency: "BRL" },
-      "semiannual": { label: "Semestral", price_display: "R$ 189,99", cryptomus_amount: "189.99", cryptomus_currency: "BRL" }
+      "monthly": { label: "Mensal", price_display: "R$ 29,90", cryptomus_amount: "29.90", cryptomus_currency: "BRL" },
+      "quarterly": { label: "Trimestral", price_display: "R$ 76,24", cryptomus_amount: "76.24", cryptomus_currency: "BRL" },
+      "semiannual": { label: "Semestral", price_display: "R$ 134,55", cryptomus_amount: "134.55", cryptomus_currency: "BRL" }
     },
     allowed_country: "BR" // ✅ País permitido para este grupo
   },
@@ -269,3 +269,4 @@ ${inviteLink}`
 });
 
 app.listen(PORT, () => console.log("Server running on port " + PORT))
+
