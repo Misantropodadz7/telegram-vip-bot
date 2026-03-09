@@ -223,7 +223,7 @@ app.post("/telegram", async (req, res) => {
 
             chat_id: chatId,
 
-            text: "❌ Este grupo é exclusivo para o Brasil."
+            text: "❌ This group is exclusive to Brazil."
 
           })
 
@@ -312,4 +312,5 @@ app.listen(PORT, () => {
   console.log("Server running on port " + PORT)
 
 })
+
 
