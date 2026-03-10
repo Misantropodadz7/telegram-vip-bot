@@ -292,3 +292,6 @@ app.post("/confirm-payment", async (req, res) => {
 app.get("/health", (req, res) => res.json({ status: "ok" }))
 
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`))
+
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`))
+
