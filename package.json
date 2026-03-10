@@ -1,7 +1,7 @@
 {
   "name": "telegram-vip-bot",
-  "version": "2.0.0",
-  "description": "Bot Telegram com pagamentos cripto via Cryptomus e liberação automática de grupos VIP",
+  "version": "3.0.0",
+  "description": "Bot Telegram com pagamentos Pix via PushinPay e liberação automática de grupos VIP",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -10,7 +10,8 @@
   "dependencies": {
     "axios": "^1.7.9",
     "body-parser": "^1.20.3",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "form-data": "^4.0.1"
   },
   "engines": {
     "node": ">=18.0.0"
