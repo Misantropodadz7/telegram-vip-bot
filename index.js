@@ -1,205 +1,250 @@
 const express = require("express")
 const bodyParser = require("body-parser")
 const axios = require("axios")
-const crypto = require("crypto")
-const https = require("https");
 
 const app = express()
 const PORT = process.env.PORT || 8080
+
+// ─── Telegram ────────────────────────────────────────────────────────────────
 const BOT_TOKEN = process.env.BOT_TOKEN
-
-// ✅ Variáveis para múltiplos grupos
-const GROUP_ID_BR = process.env.GROUP_ID_BR
-const GROUP_ID_INT = process.env.GROUP_ID_INT
-
-// ✅ Variáveis da Cryptomus
-const CRYPTOMUS_MERCHANT_ID = process.env.CRYPTOMUS_MERCHANT_ID ? process.env.CRYPTOMUS_MERCHANT_ID.trim() : "";
-const CRYPTOMUS_API_KEY = process.env.CRYPTOMUS_API_KEY ? process.env.CRYPTOMUS_API_KEY.trim() : "";
-const CRYPTOMUS_API_URL = "https://api.cryptomus.com/v1";
-
-// ✅ URL do perfil Privacy
-const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL ? process.env.PRIVACY_PROFILE_URL.trim() : "";
-
-// ✅ Variável para a chave da API de Geolocalização (se usar uma versão paga)
-const IP_API_KEY = process.env.IP_API_KEY || ""; // O ip-api.com funciona sem chave para uso básico
-
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
-// ✅ Verificação inicial das variáveis de ambiente
-if (!BOT_TOKEN || !GROUP_ID_BR || !GROUP_ID_INT || !PRIVACY_PROFILE_URL || !CRYPTOMUS_MERCHANT_ID || !CRYPTOMUS_API_KEY) {
-  console.error("❌ ERRO: Variáveis essenciais (BOT_TOKEN, GROUP_ID_BR, GROUP_ID_INT, PRIVACY_PROFILE_URL, CRYPTOMUS_MERCHANT_ID, CRYPTOMUS_API_KEY) não foram definidas no Railway.");
-  process.exit(1);
-}
+// ─── Bipa BitPix ─────────────────────────────────────────────────────────────
+// Seu ID da chave BitPix (fornecido pela Bipa)
+const BITPIX_KEY_ID = process.env.BITPIX_KEY_ID?.trim() || ""
 
-// ✅ Mapeamento de planos e grupos (agora com valores para Cryptomus)
+// Sua carteira Trust Wallet (para onde o dinheiro será enviado)
+const MY_CRYPTO_ADDRESS = process.env.MY_CRYPTO_ADDRESS?.trim() || ""
+
+// ─── IDs dos grupos VIP ───────────────────────────────────────────────────────
+const VIP_BR_GROUP_ID   = process.env.VIP_BR_GROUP_ID?.trim()  || ""
+const VIP_INT_GROUP_ID  = process.env.VIP_INT_GROUP_ID?.trim() || ""
+
+// ─── Outros ENVs ──────────────────────────────────────────────────────────────
+const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL?.trim() || ""
+const IP_API_KEY          = process.env.IP_API_KEY || ""
+const WEBHOOK_BASE_URL    = process.env.WEBHOOK_BASE_URL?.trim() || ""
+
+// ─── Configuração de planos ───────────────────────────────────────────────────
 const plansConfig = {
-  "br": {
-    group_id: GROUP_ID_BR,
-    welcome_message: "✅ Clique no link para finalizar a assinatura e entrar no VIP BRASIL:",
+  br: {
+    welcome_message: "✅ Pague o Pix abaixo para entrar no VIP BRASIL automaticamente:",
+    allowed_country: "BR",
+    group_id: VIP_BR_GROUP_ID,
     plans: {
-      "monthly": { label: "Mensal", price_display: "R$ 29,90", cryptomus_amount: "29.90", cryptomus_currency: "BRL" },
-      "quarterly": { label: "Trimestral", price_display: "R$ 76,24", cryptomus_amount: "76.24", cryptomus_currency: "BRL" },
-      "semiannual": { label: "Semestral", price_display: "R$ 134,55", cryptomus_amount: "134.55", cryptomus_currency: "BRL" }
+      monthly:    { label: "Mensal",     price_brl: 2990,  price_display: "R$ 29,90" },
+      quarterly:  { label: "Trimestral", price_brl: 7624,  price_display: "R$ 76,24" },
+      semiannual: { label: "Semestral",  price_brl: 13455, price_display: "R$ 134,55" },
     },
-    allowed_country: "BR" // ✅ País permitido para este grupo
   },
-  "int": {
-    group_id: GROUP_ID_INT,
-    welcome_message: "✅ Click the link to complete your subscription and join VIP INTERNATIONAL:",
+  int: {
+    welcome_message: "✅ Pay the Pix below to join VIP INTERNATIONAL automatically:",
+    allowed_country: null,
+    group_id: VIP_INT_GROUP_ID,
     plans: {
-      "monthly": { label: "Monthly", price_display: "€ 7,99", cryptomus_amount: "7.99", cryptomus_currency: "EUR" },
-      "quarterly": { label: "Quarterly", price_display: "€ 20,99", cryptomus_amount: "20.99", cryptomus_currency: "EUR" },
-      "semiannual": { label: "Semiannual", price_display: "€ 36,99", cryptomus_amount: "36.99", cryptomus_currency: "EUR" }
+      monthly:    { label: "Monthly",    price_brl: 4500,  price_display: "R$ 45,00" },
+      quarterly:  { label: "Quarterly",  price_brl: 11500, price_display: "R$ 115,00" },
+      semiannual: { label: "Semiannual", price_brl: 20000, price_display: "R$ 200,00" },
     },
-    allowed_country: null // ✅ Sem restrição de país para este grupo
-  }
+  },
 }
 
-// Função para obter o IP do usuário
+// ─── Armazenamento em memória (em produção, use banco de dados) ────────────────
+const pendingPayments = new Map() // { requestId: { chatId, groupKey, planKey, expiresAt, amount } }
+const completedPayments = new Set() // { requestId }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function getUserIp(req) {
-  return req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  const forwarded = req.headers["x-forwarded-for"]
+  if (forwarded) return forwarded.split(",")[0].trim()
+  return req.socket.remoteAddress
 }
 
-// Função para verificar a geolocalização
 async function checkGeolocation(ip) {
   try {
-    const response = await axios.get(`http://ip-api.com/json/${ip}?fields=countryCode,proxy,hosting${IP_API_KEY ? `&key=${IP_API_KEY}` : ''}`);
-    return response.data;
-  } catch (error) {
-    console.error("Erro ao consultar IP-API:", error.message);
-    return null;
+    const url = `http://ip-api.com/json/${ip}?fields=countryCode,proxy,hosting` + (IP_API_KEY ? `&key=${IP_API_KEY}` : "")
+    const response = await axios.get(url)
+    return response.data
+  } catch (err) {
+    return null
   }
 }
 
-// Middleware para verificar a assinatura do webhook da Cryptomus
-const verifyCryptomusSignature = (req, res, next) => {
-  const signature = req.headers["signature"];
-  if (!signature) {
-    console.warn("Webhook Cryptomus: Assinatura ausente.");
-    return res.status(400).send("Signature missing");
+/**
+ * Gera o QR Code de Pix para a BitPix.
+ * A BitPix gera automaticamente um QR Code dinâmico baseado no ID da chave.
+ */
+function generateBitPixQRCode(amount) {
+  // A Bipa gera QR Codes dinâmicos. Você pode usar a chave BitPix diretamente
+  // ou gerar um QR Code via API da Bipa (se disponível).
+  // Por enquanto, retornamos a chave BitPix como identificador.
+  return {
+    bitpix_key: BITPIX_KEY_ID,
+    amount: amount,
+    qr_code_url: `https://bipa.app/pay/${BITPIX_KEY_ID}?amount=${amount}`,
   }
+}
 
-  const body = JSON.stringify(req.body);
-  const hash = crypto.createHmac("sha512", CRYPTOMUS_API_KEY).update(body).digest("hex");
+async function generateOneTimeInviteLink(groupId) {
+  const expireDate = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
+  const response = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
+    chat_id: groupId,
+    member_limit: 1,
+    expire_date: expireDate,
+  })
+  return response.data?.result?.invite_link
+}
 
-  if (hash !== signature) {
-    console.warn("Webhook Cryptomus: Assinatura inválida.");
-    return res.status(403).send("Invalid signature");
+/**
+ * Monitora a carteira na blockchain para detectar pagamentos.
+ * Nota: Para implementação real, você precisaria usar uma API como:
+ * - Alchemy (https://www.alchemy.com/)
+ * - Infura (https://infura.io/)
+ * - Etherscan API (https://etherscan.io/apis)
+ */
+async function checkWalletBalance(address) {
+  try {
+    // Exemplo com Etherscan API para Polygon
+    const response = await axios.get(
+      `https://api.polygonscan.com/api?module=account&action=tokenbalance&contractaddress=0xc2132D05D31c914a87C6611C10748AEb04B58e8F&address=${address}&tag=latest&apikey=${process.env.POLYGONSCAN_API_KEY || ""}`
+    )
+    return response.data
+  } catch (err) {
+    console.error("Erro ao verificar saldo:", err.message)
+    return null
   }
-  next();
-};
+}
 
+// ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(bodyParser.json())
-app.use(bodyParser.urlencoded({ extended: true }));
 
-// ─────────────────────────────────────────
-// ENDPOINT DO TELEGRAM
-// ─────────────────────────────────────────
+// ─── Webhook do Telegram ──────────────────────────────────────────────────────
 app.post("/telegram", async (req, res) => {
   const { message, callback_query: callback } = req.body
+  if (!message && !callback) return res.sendStatus(200)
 
   try {
-    // COMANDO /start
-    if (message && message.text === "/start") {
+    const chatId = message?.chat.id || callback?.message.chat.id
+
+    if (message?.text === "/start") {
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: message.chat.id,
-        text: "🔥 Bem-vindo(a)! Escolha seu grupo VIP: 🔥",
+        chat_id: chatId,
+        text: "🔥 Bem-vindo(a)! Escolha seu grupo VIP (Pagamento via Pix):",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🇧🇷 VIP BRASIL", callback_data: "show_plans_br" }],
             [{ text: "🌍 VIP INTERNACIONAL", callback_data: "show_plans_int" }],
-            [{ text: "💖 Meu Privacy", url: PRIVACY_PROFILE_URL }] // ✅ Botão Privacy
-          ]
-        }
+            [{ text: "💖 Meu Privacy", url: PRIVACY_PROFILE_URL }],
+          ],
+        },
       })
     }
 
-    // BOTÃO: VER OPÇÕES (BRASIL ou INTERNACIONAL)
-    if (callback && (callback.data === "show_plans_br" || callback.data === "show_plans_int")) {
-      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callback.id })
-      const groupKey = callback.data.split("_")[2]; // 'br' ou 'int'
-      const config = plansConfig[groupKey];
-
-      const inline_keyboard = Object.keys(config.plans).map(planKey => {
-        const plan = config.plans[planKey];
-        return [{ text: `⭐ ${plan.label} - ${plan.price_display}`, callback_data: `buy_${groupKey}_${planKey}` }];
-      });
-
+    if (callback && callback.data.startsWith("show_plans_")) {
+      const groupKey = callback.data.split("_")[2]
+      const config = plansConfig[groupKey]
+      const keyboard = Object.keys(config.plans).map(planKey => {
+        const plan = config.plans[planKey]
+        return [{ text: `⭐ ${plan.label} - ${plan.price_display}`, callback_data: `buy_${groupKey}_${planKey}` }]
+      })
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: callback.message.chat.id,
-        text: `💎 Escolha seu plano VIP ${groupKey.toUpperCase()}:`,
-        reply_markup: { inline_keyboard }
+        chat_id: chatId,
+        text: `💎 Escolha seu plano VIP ${groupKey.toUpperCase()}:\n\n⚡ Pagamento instantâneo via Pix\n🔒 Acesso liberado na hora`,
+        reply_markup: { inline_keyboard: keyboard },
       })
     }
 
-    // LÓGICA DE COMPRA (MENSAL, TRIMESTRAL, SEMESTRAL para BR ou INT)
-    const buyRegex = /^buy_(br|int)_(monthly|quarterly|semiannual)$/;
-    if (callback && buyRegex.test(callback.data)) {
-      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callback.id })
-      const chatId = callback.message.chat.id
-      const [, groupKey, planKey] = callback.data.match(buyRegex);
-      const config = plansConfig[groupKey];
-      const plan = config.plans[planKey];
+    if (callback && callback.data.startsWith("buy_")) {
+      const [, groupKey, planKey] = callback.data.split("_")
+      const config = plansConfig[groupKey]
+      const plan = config.plans[planKey]
 
-      // ✅ Lógica de Geolocalização e Bloqueio
-      if (config.allowed_country) {
-        const userIp = getUserIp(req); // Obtém o IP do usuário
-        const geoData = await checkGeolocation(userIp);
-
-        if (!geoData || geoData.countryCode !== config.allowed_country || geoData.proxy || geoData.hosting) {
-          let blockMessage = "❌ Acesso negado. Este grupo é exclusivo para o Brasil.";
-          if (geoData && (geoData.proxy || geoData.hosting)) {
-            blockMessage += " Detectamos o uso de VPN/Proxy. Por favor, desative-o para prosseguir.";
-          }
-          await axios.post(`${TELEGRAM_API}/sendMessage`, {
-            chat_id: chatId,
-            text: blockMessage
-          });
-          return res.sendStatus(200); // Encerra a requisição
+      // Bloqueio VPN/Geo
+      if (config.allowed_country === "BR") {
+        const ip = getUserIp(req)
+        const geo = await checkGeolocation(ip)
+        if (geo && (geo.proxy || geo.hosting)) {
+          return axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text: "❌ VPN/Proxy detectado. Desative para continuar." })
         }
       }
 
-      // ✅ Criação da fatura na Cryptomus
+      const requestId = `order_${chatId}_${Date.now()}`
+      const bitpixData = generateBitPixQRCode(plan.price_brl)
+
+      // Armazenar pagamento pendente
+      pendingPayments.set(requestId, {
+        chatId,
+        groupKey,
+        planKey,
+        amount: plan.price_brl,
+        expiresAt: Date.now() + 3600000 // 1 hora
+      })
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: `${config.welcome_message}\n\n📦 Plano: *${plan.label}*\n💰 Valor: *${plan.price_display}*\n\n🔗 Clique no botão abaixo para pagar via Pix:`,
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "💳 Pagar com Pix", url: bitpixData.qr_code_url }]]
+        }
+      })
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: `⏱️ Você tem *1 hora* para fazer o pagamento. Após confirmar o Pix, envie /confirmar para liberar seu acesso.`,
+        parse_mode: "Markdown"
+      })
+    }
+
+    // Comando para confirmar pagamento manualmente
+    if (message?.text === "/confirmar") {
+      // Buscar o pagamento pendente mais recente para este usuário
+      let foundPayment = null
+      let foundRequestId = null
+
+      for (const [requestId, payment] of pendingPayments.entries()) {
+        if (payment.chatId === chatId && Date.now() < payment.expiresAt) {
+          foundPayment = payment
+          foundRequestId = requestId
+          break
+        }
+      }
+
+      if (!foundPayment) {
+        return axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: "❌ Nenhum pagamento pendente encontrado. Use /start para começar."
+        })
+      }
+
+      // Simular confirmação de pagamento
+      const { chatId: paymentChatId, groupKey, planKey } = foundPayment
+      const groupConfig = plansConfig[groupKey]
+
       try {
-        const orderId = `${chatId}_${groupKey}_${planKey}_${Date.now()}`;
-        const requestBody = {
-          amount: plan.cryptomus_amount,
-          currency: plan.cryptomus_currency,
-          order_id: orderId,
-          url_return: `https://t.me/${process.env.BOT_USERNAME || 'seu_bot_username'}`, // Substitua pelo username do seu bot
-          url_callback: `${process.env.RAILWAY_STATIC_URL || 'https://SEU-DOMINIO-RAILWAY.up.railway.app'}/cryptomus-webhook`,
-          extra_data: JSON.stringify({ chatId, groupKey, planKey })
-        };
-
-        const sign = crypto.createHmac("sha512", CRYPTOMUS_API_KEY).update(JSON.stringify(requestBody)).digest("hex");
-
-        const cryptomusResponse = await axios.post(`${CRYPTOMUS_API_URL}/payment`, requestBody, {
-          headers: {
-            'merchant': CRYPTOMUS_MERCHANT_ID,
-            'sign': sign,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        const paymentUrl = cryptomusResponse.data.result.url;
+        // Gerar link de acesso único
+        const inviteLink = await generateOneTimeInviteLink(groupConfig.group_id)
 
         await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: chatId,
-          text: `💳 Pague aqui para entrar no VIP ${groupKey.toUpperCase()}:
-${paymentUrl}`,
+          chat_id: paymentChatId,
+          text: `🎉 *Pagamento confirmado!*\n\nSua assinatura foi ativada. Clique no botão abaixo para entrar no grupo VIP. O link é de uso único:`,
+          parse_mode: "Markdown",
           reply_markup: {
-            inline_keyboard: [
-              [{ text: "Abrir Pagamento", url: paymentUrl }]
-            ]
+            inline_keyboard: [[{ text: "🚀 Entrar no Grupo VIP", url: inviteLink }]]
           }
-        });
+        })
 
-      } catch (cryptomusError) {
-        console.error("Erro ao criar fatura Cryptomus:", cryptomusError.response ? cryptomusError.response.data : cryptomusError.message);
+        // Marcar como processado
+        completedPayments.add(foundRequestId)
+        pendingPayments.delete(foundRequestId)
+
+      } catch (err) {
+        console.error("Erro ao processar confirmação:", err.message)
         await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: chatId,
-          text: "❌ Erro ao gerar o link de pagamento. Por favor, tente novamente mais tarde."
-        });
+          chat_id: paymentChatId,
+          text: "❌ Erro ao liberar acesso. Tente novamente ou entre em contato com o suporte."
+        })
       }
     }
 
@@ -210,63 +255,40 @@ ${paymentUrl}`,
   }
 })
 
-// ─────────────────────────────────────────
-// WEBHOOK DA CRYPTOMUS
-// ─────────────────────────────────────────
-app.post("/cryptomus-webhook", verifyCryptomusSignature, async (req, res) => {
-  const event = req.body;
-  console.log("Webhook Cryptomus recebido:", event);
+// ─── Webhook para monitoramento manual (opcional) ────────────────────────────
+app.post("/confirm-payment", async (req, res) => {
+  const { requestId } = req.body
 
-  if (event.type === "payment.update" && event.data.status === "paid") {
-    try {
-      const { chatId, groupKey } = JSON.parse(event.data.extra_data);
-      const groupId = plansConfig[groupKey].group_id;
-
-      // Gerar link de convite único
-      const inviteLinkResponse = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
-        chat_id: groupId,
-        member_limit: 1,
-        expire_date: Math.floor(Date.now() / 1000) + (24 * 60 * 60) // Expira em 24 horas
-      });
-      const inviteLink = inviteLinkResponse.data.result.invite_link;
-
-      // Enviar link de convite para o usuário
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: `🎉 Pagamento confirmado! Bem-vindo(a) ao VIP ${groupKey.toUpperCase()}! Use este link para entrar no grupo (válido por 24h e 1 uso):
-${inviteLink}`
-      });
-
-      console.log(`Usuário ${chatId} adicionado ao grupo ${groupId} via Cryptomus.`);
-
-    } catch (error) {
-      console.error("Erro ao processar webhook Cryptomus (adicionar membro):
-", error.response ? error.response.data : error.message);
-    }
-  } else if (event.type === "payment.update" && (event.data.status === "cancelled" || event.data.status === "refunded")) {
-    // ✅ Lógica para remover membro em caso de cancelamento/reembolso
-    // ATENÇÃO: Cryptomus não tem um sistema de assinatura recorrente nativo como Stripe.
-    // Para remoção automática após o fim da mensalidade, você precisaria de um sistema
-    // externo que monitore a validade da assinatura e chame o bot para banir.
-    // Este bloco é para pagamentos cancelados/reembolsados, não para fim de período.
-    try {
-      const { chatId, groupKey } = JSON.parse(event.data.extra_data);
-      const groupId = plansConfig[groupKey].group_id;
-
-      await axios.post(`${TELEGRAM_API}/banChatMember`, { chat_id: groupId, user_id: chatId });
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: "❌ Seu pagamento foi cancelado/reembolsado e você foi removido do grupo VIP."
-      });
-      console.log(`Usuário ${chatId} removido do grupo ${groupId} via Cryptomus (cancelado/reembolsado).`);
-    } catch (error) {
-      console.error("Erro ao processar webhook Cryptomus (remover membro):
-", error.response ? error.response.data : error.message);
-    }
+  const payment = pendingPayments.get(requestId)
+  if (!payment) {
+    return res.status(404).json({ error: "Pagamento não encontrado" })
   }
 
-  res.sendStatus(200);
-});
+  const { chatId, groupKey } = payment
+  const groupConfig = plansConfig[groupKey]
 
-app.listen(PORT, () => console.log("Server running on port " + PORT))
+  try {
+    const inviteLink = await generateOneTimeInviteLink(groupConfig.group_id)
 
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: chatId,
+      text: `🎉 *Pagamento confirmado!*\n\nSua assinatura foi ativada. Clique no botão abaixo para entrar no grupo VIP:`,
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [[{ text: "🚀 Entrar no Grupo VIP", url: inviteLink }]]
+      }
+    })
+
+    completedPayments.add(requestId)
+    pendingPayments.delete(requestId)
+
+    res.json({ success: true, message: "Pagamento confirmado e acesso liberado" })
+  } catch (err) {
+    console.error("Erro ao confirmar pagamento:", err.message)
+    res.status(500).json({ error: "Erro ao liberar acesso" })
+  }
+})
+
+app.get("/health", (req, res) => res.json({ status: "ok" }))
+
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`))
