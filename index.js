@@ -72,8 +72,19 @@ app.post("/telegram", async (req, res) => {
             [{ text: "🇧🇷 VIP BRASIL", callback_data: "show_plans_br" }],
             [{ text: "🌍 VIP INTERNATIONAL", callback_data: "show_plans_int" }],
             [{ text: "👤 My Privacy", url: PRIVACY_PROFILE_URL }],
+            [{ text: "ℹ️ Information", callback_data: "show_info" }],
           ],
         },
+      })
+    }
+
+    // ─── Mostrar informações ──────────────────────────────────────────────────
+    if (callback && callback.data === "show_info") {
+      const infoText = `⏰ *CONFIRMATION HOURS*\n\n🕘 Daily: 09:00 - 22:00\n(Brasília Time)\n\nPayments sent outside these hours will be confirmed during business hours.\n\n💙 Thank you for your understanding!`
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: infoText,
+        parse_mode: "Markdown",
       })
     }
 
@@ -93,8 +104,8 @@ app.post("/telegram", async (req, res) => {
       })
 
       const welcomeText = groupKey === "br"
-        ? `✨ Escolha seu plano VIP ${groupKey.toUpperCase()}:\n\n⚡ Pagamento seguro\n✅ Acesso liberado após confirmação`
-        : `✨ Choose your VIP plan:\n\n⚡ Secure payment\n✅ Access released after confirmation`
+        ? `✨ Escolha seu plano VIP ${groupKey.toUpperCase()}:\n\n⚡ Pagamento seguro\n✅ Acesso liberado após confirmação\n⏰ Confirmações: Diariamente 09:00 - 22:00`
+        : `✨ Choose your VIP plan:\n\n⚡ Secure payment\n✅ Access released after confirmation\n⏰ Confirmations: Daily 09:00 - 22:00`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -161,8 +172,8 @@ app.post("/telegram", async (req, res) => {
 
       // Enviar endereço da Trust Wallet
       const cryptoMessage = groupKey === "br"
-        ? `💎 *Pagamento em Cripto*\n\n📍 Rede: *TRON (TRX)*\n💰 Moeda: *USDT*\n💵 Valor: *${plan.price_usd} USDT*\n\n📋 *Endereço da Carteira:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *Após enviar a criptomoeda, envie o comprovante aqui* (screenshot do hash da transação)\n\nEu vou verificar e liberar seu acesso.`
-        : `💎 *Crypto Payment*\n\n📍 Network: *TRON (TRX)*\n💰 Currency: *USDT*\n💵 Amount: *${plan.price_usd} USDT*\n\n📋 *Wallet Address:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *After sending the cryptocurrency, send the receipt here* (screenshot of transaction hash)\n\nI will verify and release your access.`
+        ? `💎 *Pagamento em Cripto*\n\n📍 Rede: *TRON (TRX)*\n💰 Moeda: *USDT*\n💵 Valor: *${plan.price_usd} USDT*\n\n📋 *Endereço da Carteira:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *Após enviar a criptomoeda, envie o comprovante aqui* (screenshot do hash da transação)\n\n⏰ Confirmações: Diariamente 09:00 - 22:00 (Horário de Brasília)`
+        : `💎 *Crypto Payment*\n\n📍 Network: *TRON (TRX)*\n💰 Currency: *USDT*\n💵 Amount: *${plan.price_usd} USDT*\n\n📋 *Wallet Address:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *After sending the cryptocurrency, send the receipt here* (screenshot of transaction hash)\n\n⏰ Confirmations: Daily 09:00 - 22:00 (Brasília Time)`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -219,8 +230,8 @@ app.post("/telegram", async (req, res) => {
       })
 
       const confirmMessage = groupKey === "br"
-        ? `⏱️ *Após fazer o pagamento, envie o comprovante aqui* (screenshot ou foto)\n\nEu vou verificar e liberar seu acesso.`
-        : `⏱️ *After making the payment, send the receipt here* (screenshot or photo)\n\nI will verify and release your access.`
+        ? `⏱️ *Após fazer o pagamento, envie o comprovante aqui* (screenshot ou foto)\n\n⏰ Confirmações: Diariamente 09:00 - 22:00 (Horário de Brasília)`
+        : `⏱️ *After making the payment, send the receipt here* (screenshot or photo)\n\n⏰ Confirmations: Daily 09:00 - 22:00 (Brasília Time)`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -294,8 +305,8 @@ app.post("/telegram", async (req, res) => {
 
       // Informar ao cliente que o comprovante foi recebido
       const receiptMsg = payment.groupKey === "br"
-        ? "✅ Comprovante recebido!\n\nEstou verificando o pagamento. Você receberá o link de acesso em breve."
-        : "✅ Receipt received!\n\nI'm verifying the payment. You will receive the access link shortly."
+        ? "✅ Comprovante recebido!\n\nEstou verificando o pagamento. Você receberá o link de acesso durante o horário de confirmação (09:00 - 22:00)."
+        : "✅ Receipt received!\n\nI'm verifying the payment. You will receive the access link during confirmation hours (09:00 - 22:00)."
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -351,8 +362,8 @@ app.post("/telegram", async (req, res) => {
 
       // Enviar link para o cliente
       const approvalMsg = payment.groupKey === "br"
-        ? `✅ *Pagamento aprovado!*\n\n💎 Sua assinatura foi ativada.\n📅 Válida por ${plan.days} dias.\n\nClique no botão abaixo para entrar no grupo VIP. O link é de uso único:`
-        : `✅ *Payment approved!*\n\n💎 Your subscription has been activated.\n📅 Valid for ${plan.days} days.\n\nClick the button below to enter the VIP group. The link is single-use:`
+        ? `✅ *Pagamento aprovado!*\n\n💎 Sua assinatura foi ativada.\n📅 Válida por ${plan.days} dias.\n⏰ Acesso confirmado em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}\n\nClique no botão abaixo para entrar no grupo VIP. O link é de uso único:`
+        : `✅ *Payment approved!*\n\n💎 Your subscription has been activated.\n📅 Valid for ${plan.days} days.\n⏰ Access confirmed on ${new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}\n\nClick the button below to enter the VIP group. The link is single-use:`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: parseInt(clientChatId),
@@ -472,8 +483,6 @@ app.listen(PORT, () => {
   console.log(`✅ Cripto configurado: ${!!TRUST_WALLET_ADDRESS}`)
   console.log(`✅ LivePix configurado: ${!!LIVEPIX_URL}`)
 })
-
-
 
 
 
