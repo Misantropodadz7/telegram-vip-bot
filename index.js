@@ -83,14 +83,14 @@ app.post("/telegram", async (req, res) => {
       const config = plansConfig[groupKey]
 
       const keyboard = Object.keys(config.plans).map((planKey) => {
-        const plan = config.plans[planKey]
-        return [
-          {
-            text: `💳 ${plan.label} - ${plan.price_display}`,
-            callback_data: `buy_${groupKey}_${planKey}`,
-          },
-        ]
-      })
+  const plan = config.plans[planKey]
+  return [
+    {
+      text: `💳 ${plan.label} - $${plan.price_usd}`,
+      callback_data: `buy_${groupKey}_${planKey}`,
+    },
+  ]
+})
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -411,5 +411,6 @@ app.listen(PORT, () => {
   console.log(`✅ Cripto configurado: ${!!TRUST_WALLET_ADDRESS}`)
   console.log(`✅ LivePix configurado: ${!!LIVEPIX_URL}`)
 })
+
 
 
