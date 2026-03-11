@@ -158,7 +158,7 @@ app.post("/telegram", async (req, res) => {
       // Notificar o proprietário
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: OWNER_TELEGRAM_ID,
-        text: `🔔 Novo pagamento pendente (CRIPTO)!\n\n👤 Usuário: @${payment.userName} (ID: ${payment.userId})\n💰 Valor: ${plan.price_usd} USDT\n📦 Plano: ${plan.label}\n🏠 Grupo: ${groupKey.toUpperCase()}\n\nAguardando comprovante...`,
+        text: `🔔 Novo pagamento pendente (CRIPTO)!\n\n💰 Valor: ${plan.price_usd} USDT\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n\nAguardando comprovante...`,
       })
     }
 
@@ -201,7 +201,7 @@ app.post("/telegram", async (req, res) => {
       // Notificar o proprietário
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: OWNER_TELEGRAM_ID,
-        text: `🔔 Novo pagamento pendente (LIVEPIX)!\n\n👤 Usuário: @${payment.userName} (ID: ${payment.userId})\n💰 Valor: ${plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${groupKey.toUpperCase()}\n\nAguardando comprovante...`,
+        text: `🔔 Novo pagamento pendente (LIVEPIX)!\n\n💰 Valor: ${plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n\nAguardando comprovante...`,
       })
     }
 
@@ -233,7 +233,7 @@ app.post("/telegram", async (req, res) => {
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: OWNER_TELEGRAM_ID,
-        text: `✅ Comprovante recebido!\n\n👤 Usuário: @${payment.userName} (ID: ${payment.userId})\n💰 Valor: ${payment.paymentMethod === "crypto" ? plan.price_usd + " USDT" : plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n💳 Método: ${paymentMethodText}\n\n👇 Comprovante abaixo:`,
+        text: `✅ Comprovante recebido!\n\n💰 Valor: ${payment.paymentMethod === "crypto" ? plan.price_usd + " USDT" : plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n💳 Método: ${paymentMethodText}\n\n👇 Comprovante abaixo:`,
       })
 
       // Enviar o comprovante para o proprietário
@@ -411,6 +411,5 @@ app.listen(PORT, () => {
   console.log(`✅ Cripto configurado: ${!!TRUST_WALLET_ADDRESS}`)
   console.log(`✅ LivePix configurado: ${!!LIVEPIX_URL}`)
 })
-
 
 
