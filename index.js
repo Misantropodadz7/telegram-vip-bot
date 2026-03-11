@@ -37,9 +37,9 @@ const plansConfig = {
     welcome_message: "💰 Choose your payment method:",
     group_id: VIP_INT_GROUP_ID,
     plans: {
-      monthly: { label: "Monthly", price: "45.00", price_display: "R$ 45,00", price_usd: "11", days: 30 },
-      quarterly: { label: "Quarterly", price: "115.00", price_display: "R$ 115,00", price_usd: "28", days: 90 },
-      semiannual: { label: "Semiannual", price: "200.00", price_display: "R$ 200,00", price_usd: "49", days: 180 },
+      monthly: { label: "Monthly", price: "45.00", price_display: "$11", price_usd: "11", days: 30 },
+      quarterly: { label: "Quarterly", price: "115.00", price_display: "$28", price_usd: "28", days: 90 },
+      semiannual: { label: "Semiannual", price: "200.00", price_display: "$49", price_usd: "49", days: 180 },
     },
   },
 }
@@ -60,18 +60,18 @@ app.post("/telegram", async (req, res) => {
   try {
     const chatId = message?.chat.id || callback?.message.chat.id
     const userId = message?.from.id || callback?.from.id
-    const userName = message?.from.username || callback?.from.username || "Usuário"
+    const userName = message?.from.username || callback?.from.username || "User"
 
     // ─── Comando /start ───────────────────────────────────────────────────────
     if (message?.text === "/start") {
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: "🎯 Bem-vindo(a)! Escolha seu grupo VIP:",
+        text: "🎯 Welcome! Choose your VIP group:",
         reply_markup: {
           inline_keyboard: [
             [{ text: "🇧🇷 VIP BRASIL", callback_data: "show_plans_br" }],
-            [{ text: "🌍 VIP INTERNACIONAL", callback_data: "show_plans_int" }],
-            [{ text: "👤 Meu Privacy", url: PRIVACY_PROFILE_URL }],
+            [{ text: "🌍 VIP INTERNATIONAL", callback_data: "show_plans_int" }],
+            [{ text: "👤 My Privacy", url: PRIVACY_PROFILE_URL }],
           ],
         },
       })
@@ -83,18 +83,22 @@ app.post("/telegram", async (req, res) => {
       const config = plansConfig[groupKey]
 
       const keyboard = Object.keys(config.plans).map((planKey) => {
-  const plan = config.plans[planKey]
-  return [
-    {
-      text: `💳 ${plan.label} - $${plan.price_usd}`,
-      callback_data: `buy_${groupKey}_${planKey}`,
-    },
-  ]
-})
+        const plan = config.plans[planKey]
+        return [
+          {
+            text: `💳 ${plan.label} - ${plan.price_display}`,
+            callback_data: `buy_${groupKey}_${planKey}`,
+          },
+        ]
+      })
+
+      const welcomeText = groupKey === "br"
+        ? `✨ Escolha seu plano VIP ${groupKey.toUpperCase()}:\n\n⚡ Pagamento seguro\n✅ Acesso liberado após confirmação`
+        : `✨ Choose your VIP plan:\n\n⚡ Secure payment\n✅ Access released after confirmation`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: `✨ Escolha seu plano VIP ${groupKey.toUpperCase()}:\n\n⚡ Pagamento seguro\n✅ Acesso liberado após confirmação`,
+        text: welcomeText,
         reply_markup: { inline_keyboard: keyboard },
       })
     }
@@ -116,13 +120,17 @@ app.post("/telegram", async (req, res) => {
       })
 
       // Perguntar método de pagamento
+      const paymentMethodText = groupKey === "br"
+        ? `${config.welcome_message}\n\n💰 Plano: *${plan.label}*\n💵 Valor: *${plan.price_display}*\n\nEscolha como deseja pagar:`
+        : `${config.welcome_message}\n\n💰 Plan: *${plan.label}*\n💵 Amount: *${plan.price_display}*\n\nChoose how you want to pay:`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: `${config.welcome_message}\n\n💰 Plano: *${plan.label}*\n💵 Valor: *${plan.price_display}*\n\nEscolha como deseja pagar:`,
+        text: paymentMethodText,
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "💎 Cripto (USDT/TRON)", callback_data: `pay_crypto_${groupKey}_${planKey}` }],
+            [{ text: groupKey === "br" ? "💎 Cripto (USDT/TRON)" : "💎 Crypto (USDT/TRON)", callback_data: `pay_crypto_${groupKey}_${planKey}` }],
             [{ text: "💳 LivePix", callback_data: `pay_livepix_${groupKey}_${planKey}` }],
           ],
         },
@@ -137,9 +145,12 @@ app.post("/telegram", async (req, res) => {
 
       const payment = pendingPayments.get(chatId)
       if (!payment) {
+        const expiredMsg = groupKey === "br"
+          ? "❌ Sessão expirada. Use /start para começar novamente."
+          : "❌ Session expired. Use /start to begin again."
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Sessão expirada. Use /start para começar novamente.",
+          text: expiredMsg,
         })
       }
 
@@ -149,16 +160,24 @@ app.post("/telegram", async (req, res) => {
       pendingPayments.set(chatId, payment)
 
       // Enviar endereço da Trust Wallet
+      const cryptoMessage = groupKey === "br"
+        ? `💎 *Pagamento em Cripto*\n\n📍 Rede: *TRON (TRX)*\n💰 Moeda: *USDT*\n💵 Valor: *${plan.price_usd} USDT*\n\n📋 *Endereço da Carteira:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *Após enviar a criptomoeda, envie o comprovante aqui* (screenshot do hash da transação)\n\nEu vou verificar e liberar seu acesso em até 5 minutos.`
+        : `💎 *Crypto Payment*\n\n📍 Network: *TRON (TRX)*\n💰 Currency: *USDT*\n💵 Amount: *${plan.price_usd} USDT*\n\n📋 *Wallet Address:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *After sending the cryptocurrency, send the receipt here* (screenshot of transaction hash)\n\nI will verify and release your access within 5 minutes.`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: `💎 *Pagamento em Cripto*\n\n📍 Rede: *TRON (TRX)*\n💰 Moeda: *USDT*\n💵 Valor: *${plan.price_usd} USDT*\n\n📋 *Endereço da Carteira:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *Após enviar a criptomoeda, envie o comprovante aqui* (screenshot do hash da transação)\n\nEu vou verificar e liberar seu acesso em até 5 minutos.`,
+        text: cryptoMessage,
         parse_mode: "Markdown",
       })
 
       // Notificar o proprietário
+      const notifyMsg = groupKey === "br"
+        ? `🔔 Novo pagamento pendente (CRIPTO)!\n\n💰 Valor: ${plan.price_usd} USDT\n📦 Plano: ${plan.label}\n🏠 Grupo: ${groupKey.toUpperCase()}\n\nAguardando comprovante...`
+        : `🔔 New pending payment (CRYPTO)!\n\n💰 Amount: ${plan.price_usd} USDT\n📦 Plan: ${plan.label}\n🏠 Group: ${groupKey.toUpperCase()}\n\nAwaiting receipt...`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: OWNER_TELEGRAM_ID,
-        text: `🔔 Novo pagamento pendente (CRIPTO)!\n\n💰 Valor: ${plan.price_usd} USDT\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n\nAguardando comprovante...`,
+        text: notifyMsg,
       })
     }
 
@@ -170,9 +189,12 @@ app.post("/telegram", async (req, res) => {
 
       const payment = pendingPayments.get(chatId)
       if (!payment) {
+        const expiredMsg = groupKey === "br"
+          ? "❌ Sessão expirada. Use /start para começar novamente."
+          : "❌ Session expired. Use /start to begin again."
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Sessão expirada. Use /start para começar novamente.",
+          text: expiredMsg,
         })
       }
 
@@ -181,27 +203,39 @@ app.post("/telegram", async (req, res) => {
       pendingPayments.set(chatId, payment)
 
       // Enviar link do LivePix
+      const livepixMessage = groupKey === "br"
+        ? `💳 *Pagamento via LivePix*\n\n💵 Valor: *${plan.price_display}*\n\n👇 Clique no botão abaixo para pagar:`
+        : `💳 *Payment via LivePix*\n\n💵 Amount: *${plan.price_display}*\n\n👇 Click the button below to pay:`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: `💳 *Pagamento via LivePix*\n\n💵 Valor: *${plan.price_display}*\n\n👇 Clique no botão abaixo para pagar:`,
+        text: livepixMessage,
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "💳 Pagar com LivePix", url: LIVEPIX_URL }],
+            [{ text: groupKey === "br" ? "💳 Pagar com LivePix" : "💳 Pay with LivePix", url: LIVEPIX_URL }],
           ],
         },
       })
 
+      const confirmMessage = groupKey === "br"
+        ? `⏱️ *Após fazer o pagamento, envie o comprovante aqui* (screenshot ou foto)\n\nEu vou verificar e liberar seu acesso em até 5 minutos.`
+        : `⏱️ *After making the payment, send the receipt here* (screenshot or photo)\n\nI will verify and release your access within 5 minutes.`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: `⏱️ *Após fazer o pagamento, envie o comprovante aqui* (screenshot ou foto)\n\nEu vou verificar e liberar seu acesso em até 5 minutos.`,
+        text: confirmMessage,
         parse_mode: "Markdown",
       })
 
       // Notificar o proprietário
+      const notifyMsg = groupKey === "br"
+        ? `🔔 Novo pagamento pendente (LIVEPIX)!\n\n💰 Valor: ${plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${groupKey.toUpperCase()}\n\nAguardando comprovante...`
+        : `🔔 New pending payment (LIVEPIX)!\n\n💰 Amount: ${plan.price_display}\n📦 Plan: ${plan.label}\n🏠 Group: ${groupKey.toUpperCase()}\n\nAwaiting receipt...`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: OWNER_TELEGRAM_ID,
-        text: `🔔 Novo pagamento pendente (LIVEPIX)!\n\n💰 Valor: ${plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n\nAguardando comprovante...`,
+        text: notifyMsg,
       })
     }
 
@@ -210,9 +244,12 @@ app.post("/telegram", async (req, res) => {
       const payment = pendingPayments.get(chatId)
 
       if (!payment) {
+        const noPaymentMsg = payment?.groupKey === "int"
+          ? "❌ No pending payment found. Use /start to begin."
+          : "❌ Nenhum pagamento pendente encontrado. Use /start para começar."
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Nenhum pagamento pendente encontrado. Use /start para começar.",
+          text: noPaymentMsg,
         })
       }
 
@@ -229,11 +266,15 @@ app.post("/telegram", async (req, res) => {
       // Notificar o proprietário com o comprovante
       const groupConfig = plansConfig[payment.groupKey]
       const plan = groupConfig.plans[payment.planKey]
-      const paymentMethodText = payment.paymentMethod === "crypto" ? "💎 CRIPTO" : "💳 LIVEPIX"
+      const paymentMethodText = payment.paymentMethod === "crypto" ? "💎 CRYPTO" : "💳 LIVEPIX"
+
+      const notifyMsg = payment.groupKey === "br"
+        ? `✅ Comprovante recebido!\n\n💰 Valor: ${payment.paymentMethod === "crypto" ? plan.price_usd + " USDT" : plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n💳 Método: ${paymentMethodText}\n\n👇 Comprovante abaixo:`
+        : `✅ Receipt received!\n\n💰 Amount: ${payment.paymentMethod === "crypto" ? plan.price_usd + " USDT" : plan.price_display}\n📦 Plan: ${plan.label}\n🏠 Group: ${payment.groupKey.toUpperCase()}\n💳 Method: ${paymentMethodText}\n\n👇 Receipt below:`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: OWNER_TELEGRAM_ID,
-        text: `✅ Comprovante recebido!\n\n💰 Valor: ${payment.paymentMethod === "crypto" ? plan.price_usd + " USDT" : plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n💳 Método: ${paymentMethodText}\n\n👇 Comprovante abaixo:`,
+        text: notifyMsg,
       })
 
       // Enviar o comprovante para o proprietário
@@ -241,29 +282,33 @@ app.post("/telegram", async (req, res) => {
         await axios.post(`${TELEGRAM_API}/sendPhoto`, {
           chat_id: OWNER_TELEGRAM_ID,
           photo: fileId,
-          caption: `Comprovante de @${payment.userName}`,
+          caption: `Receipt from @${payment.userName}`,
         })
       } else if (message.document) {
         await axios.post(`${TELEGRAM_API}/sendDocument`, {
           chat_id: OWNER_TELEGRAM_ID,
           document: fileId,
-          caption: `Comprovante de @${payment.userName}`,
+          caption: `Receipt from @${payment.userName}`,
         })
       }
 
       // Informar ao cliente que o comprovante foi recebido
+      const receiptMsg = payment.groupKey === "br"
+        ? "✅ Comprovante recebido!\n\nEstou verificando o pagamento. Você receberá o link de acesso em breve."
+        : "✅ Receipt received!\n\nI'm verifying the payment. You will receive the access link shortly."
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: "✅ Comprovante recebido!\n\nEstou verificando o pagamento. Você receberá o link de acesso em breve.",
+        text: receiptMsg,
       })
     }
 
     // ─── Comando /aprovar ─────────────────────────────────────────────────────
-    if (message?.text?.startsWith("/aprovar")) {
+    if (message?.text?.startsWith("/aprovar") || message?.text?.startsWith("/approve")) {
       if (userId.toString() !== OWNER_TELEGRAM_ID) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Você não tem permissão para usar este comando.",
+          text: "❌ You don't have permission to use this command.",
         })
       }
 
@@ -273,7 +318,7 @@ app.post("/telegram", async (req, res) => {
       if (!clientChatId) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Use: /aprovar <ID_DO_CLIENTE>",
+          text: "❌ Use: /aprovar <CLIENT_ID> or /approve <CLIENT_ID>",
         })
       }
 
@@ -281,7 +326,7 @@ app.post("/telegram", async (req, res) => {
       if (!payment) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Pagamento não encontrado.",
+          text: "❌ Payment not found.",
         })
       }
 
@@ -293,7 +338,7 @@ app.post("/telegram", async (req, res) => {
       if (!inviteLink) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Erro ao gerar link de acesso.",
+          text: "❌ Error generating access link.",
         })
       }
 
@@ -305,43 +350,51 @@ app.post("/telegram", async (req, res) => {
       })
 
       // Enviar link para o cliente
+      const approvalMsg = payment.groupKey === "br"
+        ? `✅ *Pagamento aprovado!*\n\n💎 Sua assinatura foi ativada.\n📅 Válida por ${plan.days} dias.\n\nClique no botão abaixo para entrar no grupo VIP. O link é de uso único:`
+        : `✅ *Payment approved!*\n\n💎 Your subscription has been activated.\n📅 Valid for ${plan.days} days.\n\nClick the button below to enter the VIP group. The link is single-use:`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: parseInt(clientChatId),
-        text: `✅ *Pagamento aprovado!*\n\n💎 Sua assinatura foi ativada.\n📅 Válida por ${plan.days} dias.\n\nClique no botão abaixo para entrar no grupo VIP. O link é de uso único:`,
+        text: approvalMsg,
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "🚀 Entrar no Grupo VIP", url: inviteLink }],
+            [{ text: payment.groupKey === "br" ? "🚀 Entrar no Grupo VIP" : "🚀 Enter VIP Group", url: inviteLink }],
           ],
         },
       })
 
       // Confirmar para o proprietário
+      const confirmMsg = payment.groupKey === "br"
+        ? `✅ Acesso liberado para @${payment.userName}!`
+        : `✅ Access released for @${payment.userName}!`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: `✅ Acesso liberado para @${payment.userName}!`,
+        text: confirmMsg,
       })
 
       pendingPayments.delete(parseInt(clientChatId))
     }
 
     // ─── Comando /rejeitar ────────────────────────────────────────────────────
-    if (message?.text?.startsWith("/rejeitar")) {
+    if (message?.text?.startsWith("/rejeitar") || message?.text?.startsWith("/reject")) {
       if (userId.toString() !== OWNER_TELEGRAM_ID) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Você não tem permissão para usar este comando.",
+          text: "❌ You don't have permission to use this command.",
         })
       }
 
       const parts = message.text.split(" ")
       const clientChatId = parts[1]
-      const reason = parts.slice(2).join(" ") || "Comprovante inválido"
+      const reason = parts.slice(2).join(" ") || (message.text.startsWith("/rejeitar") ? "Comprovante inválido" : "Invalid receipt")
 
       if (!clientChatId) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Use: /rejeitar <ID_DO_CLIENTE> <motivo>",
+          text: "❌ Use: /rejeitar <CLIENT_ID> <reason> or /reject <CLIENT_ID> <reason>",
         })
       }
 
@@ -349,20 +402,28 @@ app.post("/telegram", async (req, res) => {
       if (!payment) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
-          text: "❌ Pagamento não encontrado.",
+          text: "❌ Payment not found.",
         })
       }
 
       // Informar ao cliente
+      const rejectMsg = payment.groupKey === "br"
+        ? `❌ Seu pagamento foi rejeitado.\n\n📝 Motivo: ${reason}\n\nTente novamente com /start`
+        : `❌ Your payment has been rejected.\n\n📝 Reason: ${reason}\n\nTry again with /start`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: parseInt(clientChatId),
-        text: `❌ Seu pagamento foi rejeitado.\n\n📝 Motivo: ${reason}\n\nTente novamente com /start`,
+        text: rejectMsg,
       })
 
       // Confirmar para o proprietário
+      const confirmMsg = payment.groupKey === "br"
+        ? `✅ Pagamento rejeitado para @${payment.userName}.`
+        : `✅ Payment rejected for @${payment.userName}.`
+
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: `✅ Pagamento rejeitado para @${payment.userName}.`,
+        text: confirmMsg,
       })
 
       pendingPayments.delete(parseInt(clientChatId))
@@ -411,6 +472,7 @@ app.listen(PORT, () => {
   console.log(`✅ Cripto configurado: ${!!TRUST_WALLET_ADDRESS}`)
   console.log(`✅ LivePix configurado: ${!!LIVEPIX_URL}`)
 })
+
 
 
 
