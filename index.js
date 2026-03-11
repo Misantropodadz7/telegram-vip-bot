@@ -161,8 +161,8 @@ app.post("/telegram", async (req, res) => {
 
       // Enviar endereço da Trust Wallet
       const cryptoMessage = groupKey === "br"
-        ? `💎 *Pagamento em Cripto*\n\n📍 Rede: *TRON (TRX)*\n💰 Moeda: *USDT*\n💵 Valor: *${plan.price_usd} USDT*\n\n📋 *Endereço da Carteira:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *Após enviar a criptomoeda, envie o comprovante aqui* (screenshot do hash da transação)\n\nEu vou verificar e liberar seu acesso em até 5 minutos.`
-        : `💎 *Crypto Payment*\n\n📍 Network: *TRON (TRX)*\n💰 Currency: *USDT*\n💵 Amount: *${plan.price_usd} USDT*\n\n📋 *Wallet Address:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *After sending the cryptocurrency, send the receipt here* (screenshot of transaction hash)\n\nI will verify and release your access within 5 minutes.`
+        ? `💎 *Pagamento em Cripto*\n\n📍 Rede: *TRON (TRX)*\n💰 Moeda: *USDT*\n💵 Valor: *${plan.price_usd} USDT*\n\n📋 *Endereço da Carteira:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *Após enviar a criptomoeda, envie o comprovante aqui* (screenshot do hash da transação)\n\nEu vou verificar e liberar seu acesso.`
+        : `💎 *Crypto Payment*\n\n📍 Network: *TRON (TRX)*\n💰 Currency: *USDT*\n💵 Amount: *${plan.price_usd} USDT*\n\n📋 *Wallet Address:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *After sending the cryptocurrency, send the receipt here* (screenshot of transaction hash)\n\nI will verify and release your access.`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -219,8 +219,8 @@ app.post("/telegram", async (req, res) => {
       })
 
       const confirmMessage = groupKey === "br"
-        ? `⏱️ *Após fazer o pagamento, envie o comprovante aqui* (screenshot ou foto)\n\nEu vou verificar e liberar seu acesso em até 5 minutos.`
-        : `⏱️ *After making the payment, send the receipt here* (screenshot or photo)\n\nI will verify and release your access within 5 minutes.`
+        ? `⏱️ *Após fazer o pagamento, envie o comprovante aqui* (screenshot ou foto)\n\nEu vou verificar e liberar seu acesso.`
+        : `⏱️ *After making the payment, send the receipt here* (screenshot or photo)\n\nI will verify and release your access.`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -472,6 +472,7 @@ app.listen(PORT, () => {
   console.log(`✅ Cripto configurado: ${!!TRUST_WALLET_ADDRESS}`)
   console.log(`✅ LivePix configurado: ${!!LIVEPIX_URL}`)
 })
+
 
 
 
