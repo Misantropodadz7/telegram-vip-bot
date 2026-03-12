@@ -5,7 +5,6 @@ const mongoose = require("mongoose")
 const { google } = require("googleapis")
 
 const app = express()
-// Railway injeta a porta automaticamente na variável PORT
 const PORT = process.env.PORT || 3000
 
 // TELEGRAM
@@ -123,15 +122,19 @@ const subscriptionSchema = new mongoose.Schema({
 const PendingPayment = mongoose.model("PendingPayment", pendingPaymentSchema)
 const Subscription = mongoose.model("Subscription", subscriptionSchema)
 
-// Middleware para processar JSON
 app.use(bodyParser.json())
+
+// Rota raiz para teste no navegador
+app.get("/", (req, res) => {
+  res.send("Bot Online! Se você está vendo isso, o Railway está funcionando corretamente.")
+})
 
 // TELEGRAM WEBHOOK
 app.post("/telegram", async (req, res) => {
   const { message, callback_query } = req.body
   const callback = callback_query
 
-  // Log para depuração no Railway
+  // Log crucial para depuração
   console.log("Update recebido:", JSON.stringify(req.body, null, 2))
 
   if (!message && !callback) return res.sendStatus(200)
@@ -141,7 +144,7 @@ app.post("/telegram", async (req, res) => {
     const userId = message?.from?.id || callback?.from?.id
     const username = message?.from?.username || callback?.from?.username || "User"
 
-    // START - Usando startsWith para maior flexibilidade
+    // START
     if (message?.text?.startsWith("/start")) {
       console.log(`Comando /start recebido de ${username} (ID: ${userId}) no chat ${chatId}`)
       const response = await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -299,47 +302,38 @@ app.get("/health", (req, res) => {
   })
 })
 
-// START
-async function start() {
+// INICIALIZAÇÃO ASSÍNCRONA
+async function initializeDependencies() {
   try {
     if (!BOT_TOKEN) {
       console.error("BOT_TOKEN não configurado")
-      process.exit(1)
+      return
     }
 
     if (!MONGODB_URI || MONGODB_URI.trim() === "") {
-      console.error("MONGODB_URI está vazia ou não configurada nas variáveis do Railway")
-      process.exit(1)
+      console.error("MONGODB_URI está vazia ou não configurada")
+      return
     }
 
     // Lógica robusta para tratar caracteres especiais na senha
     let connectionUri = MONGODB_URI;
-    
-    // Se a URI for do MongoDB Atlas (contém @ e +srv)
     if (MONGODB_URI.includes("@") && MONGODB_URI.includes("mongodb+srv://")) {
       try {
-        // Extrai o protocolo
         const protocol = "mongodb+srv://";
-        // Remove o protocolo da string
         const withoutProtocol = MONGODB_URI.replace(protocol, "");
-        // Separa as credenciais do host (o primeiro @ separa as credenciais do host)
         const atIndex = withoutProtocol.indexOf("@");
         if (atIndex !== -1) {
           const credentials = withoutProtocol.substring(0, atIndex);
           const host = withoutProtocol.substring(atIndex + 1);
-          
-          // Separa usuário e senha
           const colonIndex = credentials.indexOf(":");
           if (colonIndex !== -1) {
             const user = credentials.substring(0, colonIndex);
             const password = credentials.substring(colonIndex + 1);
-            
-            // Reconstrói a URI codificando usuário e senha
             connectionUri = `${protocol}${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}`;
           }
         }
       } catch (e) {
-        console.log("Aviso: Erro ao processar URI, tentando conexão direta.");
+        console.log("Aviso: Erro ao processar URI.");
       }
     }
 
@@ -357,25 +351,20 @@ async function start() {
       try {
         const response = await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_BASE_URL}/telegram`);
         console.log("Resposta do Telegram ao configurar Webhook:", response.data);
-        if (response.data.ok) {
-          console.log("Webhook configurado com sucesso!");
-        } else {
-          console.log("Erro ao configurar Webhook:", response.data.description);
-        }
       } catch (webhookErr) {
         console.error("Erro ao chamar API do Telegram para Webhook:", webhookErr.message);
       }
     }
-
-    // CRUCIAL: No Railway, a aplicação DEVE ouvir em 0.0.0.0
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Servidor rodando em 0.0.0.0:${PORT}`)
-    })
   } catch (err) {
-    console.error("Erro fatal no início do bot:", err.message)
-    // Não encerra o processo imediatamente para permitir ver o log no Railway
-    setTimeout(() => process.exit(1), 5000);
+    console.error("Erro fatal na inicialização:", err.message)
   }
 }
 
-start()
+// O servidor Express sobe PRIMEIRO para o Railway aceitar o tráfego
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Servidor rodando em 0.0.0.0:${PORT}`)
+  console.log("Iniciando conexões externas (MongoDB, Google Sheets)...")
+  
+  // Inicia conexões em segundo plano
+  initializeDependencies()
+})
