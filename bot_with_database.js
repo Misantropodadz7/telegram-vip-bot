@@ -40,60 +40,67 @@ app.post("/telegram", async (req, res) => {
     const callbackData = callback_query?.data;
 
     if (text || callbackData) {
-      console.log(`>>> MENSAGEM RECEBIDA: ${text || callbackData} de @${username} <<<`);
+      console.log(`>>> RECEBIDO: ${text || callbackData} de @${username} <<<`);
     }
 
     // 1. Comando /start
     if (text && text.startsWith("/start")) {
       await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
-          [{ text: "VIP BR 🇧🇷", callback_data: "plans_br" }],
-          [{ text: "VIP INT 🌎", callback_data: "plans_int" }],
+          [{ text: "VIP BR 🇧🇷", callback_data: "p_br" }],
+          [{ text: "VIP INT 🌎", callback_data: "p_int" }],
           [{ text: "Acessar meu Privacy 🔥", url: PRIVACY_PROFILE_URL }]
         ]
       });
       return;
     }
 
-    // 2. Escolha de Grupo
-    if (callbackData === "plans_br" || callbackData === "plans_int") {
-      const groupKey = callbackData.split("_")[1];
+    // 2. Escolha de Grupo (BR ou INT)
+    if (callbackData === "p_br" || callbackData === "p_int") {
+      const groupKey = callbackData.split("_")[1]; // 'br' ou 'int'
       const config = getPlansConfig();
       const groupConfig = config[groupKey];
       
       const keyboard = Object.keys(groupConfig.plans).map(key => ([{
         text: `${groupConfig.plans[key].label} - ${groupConfig.plans[key].price_display}`,
-        callback_data: `buy_${groupKey}_${key}`
+        callback_data: `b_${groupKey}_${key}` // Ex: b_br_m, b_int_q
       }]));
-      keyboard.push([{ text: "⬅️ Voltar", callback_data: "back_to_start" }]);
+      keyboard.push([{ text: "⬅️ Voltar", callback_data: "back" }]);
       
       await sendMessage(chatId, "Escolha seu plano:", { inline_keyboard: keyboard });
       return;
     }
 
-    // 3. Voltar
-    if (callbackData === "back_to_start") {
+    // 3. Voltar para o menu inicial
+    if (callbackData === "back") {
       await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
-          [{ text: "VIP BR 🇧🇷", callback_data: "plans_br" }],
-          [{ text: "VIP INT 🌎", callback_data: "plans_int" }],
+          [{ text: "VIP BR 🇧🇷", callback_data: "p_br" }],
+          [{ text: "VIP INT 🌎", callback_data: "p_int" }],
           [{ text: "Acessar meu Privacy 🔥", url: PRIVACY_PROFILE_URL }]
         ]
       });
       return;
     }
 
-    // 4. Clique no Plano
-    if (callbackData && callbackData.startsWith("buy_")) {
+    // 4. Clique no Plano (CHAVES CURTAS: b_br_m, b_br_q, b_br_s, b_int_m, b_int_q, b_int_s)
+    if (callbackData && callbackData.startsWith("b_")) {
       const parts = callbackData.split("_");
-      const groupKey = parts[1];
-      const planKey = parts[2];
+      const groupKey = parts[1]; // 'br' ou 'int'
+      const planShortKey = parts[2]; // 'm', 'q' ou 's'
       
+      const keyMap = { 'm': 'monthly', 'q': 'quarterly', 's': 'semiannual' };
+      const planKey = keyMap[planShortKey] || planShortKey;
+
+      console.log(`[COMPRA] Grupo=${groupKey}, Plano=${planKey}`);
+
+      // Resposta imediata ao cliente
       await sendMessage(chatId, "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat.");
 
+      // Salva no banco em segundo plano
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment");
-        await PendingPayment.findByIdAndUpdate(
+        PendingPayment.findByIdAndUpdate(
           chatId,
           { _id: chatId, userId, userName: username, groupKey, planKey, status: "awaiting_receipt" },
           { upsert: true, new: true }
@@ -102,7 +109,7 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 5. Comprovante
+    // 5. Recebimento de Comprovante
     if (message && (message.photo || message.document)) {
       await sendMessage(chatId, "✅ Comprovante recebido!\n\n🕒 **Atendimento:** 09:00 às 22:00 todos os dias.\n\nAguarde, em breve seu acesso será liberado!");
 
@@ -173,8 +180,8 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
 
 function getPlansConfig() {
   return {
-    br: { group_id: VIP_BR_GROUP_ID, plans: { monthly: { label: "Mensal", price_display: "R$ 29,90", days: 30 }, quarterly: { label: "Trimestral", price_display: "R$ 76,24", days: 90 }, semiannual: { label: "Semestral", price_display: "R$ 134,55", days: 180 } } },
-    int: { group_id: VIP_INT_GROUP_ID, plans: { monthly: { label: "Monthly", price_display: "$11", days: 30 }, quarterly: { label: "Quarterly", price_display: "$28", days: 90 }, semiannual: { label: "Semiannual", price_display: "$49", days: 180 } } }
+    br: { group_id: VIP_BR_GROUP_ID, plans: { m: { label: "Mensal", price_display: "R$ 29,90", days: 30 }, q: { label: "Trimestral", price_display: "R$ 76,24", days: 90 }, s: { label: "Semestral", price_display: "R$ 134,55", days: 180 } } },
+    int: { group_id: VIP_INT_GROUP_ID, plans: { m: { label: "Monthly", price_display: "$11", days: 30 }, q: { label: "Quarterly", price_display: "$28", days: 90 }, s: { label: "Semiannual", price_display: "$49", days: 180 } } }
   };
 }
 
