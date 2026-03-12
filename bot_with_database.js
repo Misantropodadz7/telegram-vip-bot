@@ -121,60 +121,70 @@ app.use(bodyParser.json())
 // TELEGRAM WEBHOOK
 app.post("/telegram", async (req, res) => {
 
-const { message, callback_query } = req.body
-const callback = callback_query
+  const { message, callback_query } = req.body
+  const callback = callback_query
 
-if (!message && !callback) return res.sendStatus(200)
+  if (!message && !callback) return res.sendStatus(200)
 
-try {
+  try {
 
-```
-const chatId = message?.chat.id || callback?.message.chat.id
-const userId = message?.from.id || callback?.from.id
-const username = message?.from.username || callback?.from.username || "User"
+    const chatId = message?.chat?.id || callback?.message?.chat?.id
+    const userId = message?.from?.id || callback?.from?.id
+    const username = message?.from?.username || callback?.from?.username || "User"
 
-// START
-if (message?.text === "/start") {
+    // START
+    if (message?.text === "/start") {
 
-  await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id: chatId,
-    text: "Escolha seu grupo VIP",
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "VIP BR", callback_data: "plans_br" }],
-        [{ text: "VIP INT", callback_data: "plans_int" }]
-      ]
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: "Escolha seu grupo VIP",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "VIP BR", callback_data: "plans_br" }],
+            [{ text: "VIP INT", callback_data: "plans_int" }]
+          ]
+        }
+      })
+
     }
-  })
 
-}
+    // PLANOS
+    if (callback && callback.data.startsWith("plans_")) {
 
-// PLANOS
-if (callback && callback.data.startsWith("plans_")) {
+      const groupKey = callback.data.split("_")[1]
+      const config = plansConfig[groupKey]
 
-  const groupKey = callback.data.split("_")[1]
-  const config = plansConfig[groupKey]
+      const keyboard = Object.keys(config.plans).map(p => {
 
-  const keyboard = Object.keys(config.plans).map(p => {
+        const plan = config.plans[p]
 
-    const plan = config.plans[p]
+        return [{
+          text: `${plan.label} - ${plan.price_display}`,
+          callback_data: `buy_${groupKey}_${p}`
+        }]
 
-    return [{
-      text: `${plan.label} - ${plan.price_display}`,
-      callback_data: `buy_${groupKey}_${p}`
-    }]
+      })
 
-  })
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: "Escolha seu plano",
+        reply_markup: {
+          inline_keyboard: keyboard
+        }
+      })
 
-  await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id: chatId,
-    text: "Escolha seu plano",
-    reply_markup: {
-      inline_keyboard: keyboard
     }
-  })
 
-}
+    res.sendStatus(200)
+
+  } catch (err) {
+
+    console.log("Erro telegram:", err.message)
+    res.sendStatus(200)
+
+  }
+
+})
 // COMPRA
 if (callback && callback.data.startsWith("buy_")) {
 
@@ -388,6 +398,7 @@ console.log("Erro start:", err.message)
 }
 
 start()
+
 
 
 
