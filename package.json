@@ -1,31 +1,23 @@
 {
-  "name": "telegram-vip-bot-db",
-  "version": "2.0.0",
-  "description": "Bot Telegram VIP com MongoDB e Google Sheets integrados",
-  "main": "bot_with_database.js",
-  "scripts": {
-    "start": "node bot_with_database.js",
-    "dev": "nodemon bot_with_database.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [
-    "telegram",
-    "bot",
-    "vip",
-    "subscription",
-    "mongodb",
-    "google-sheets"
-  ],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "axios": "^1.6.0",
-    "body-parser": "^1.20.2",
-    "express": "^4.18.2",
-    "googleapis": "^118.0.0",
-    "mongoose": "^7.5.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  }
+"name": "telegram-vip-bot-db",
+"version": "2.0.0",
+"description": "Bot Telegram VIP com MongoDB e Google Sheets integrados",
+"main": "bot_with_database.js",
+"scripts": {
+"start": "node bot_with_database.js",
+"dev": "nodemon bot_with_database.js"
+},
+"engines": {
+"node": ">=18.0.0"
+},
+"dependencies": {
+"axios": "^1.6.0",
+"body-parser": "^1.20.2",
+"express": "^4.18.2",
+"googleapis": "^118.0.0",
+"mongoose": "^7.5.0"
+},
+"devDependencies": {
+"nodemon": "^3.0.1"
+}
 }
