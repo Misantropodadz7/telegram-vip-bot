@@ -24,13 +24,13 @@ app.use(bodyParser.urlencoded({ extended: true }))
 
 // ROTA DE TESTE
 app.get("/", (req, res) => {
-  res.send(`<h1>Bot VIP Online e Estável!</h1><p>Status: Ativo e aguardando Telegram.</p>`)
+  res.send(`<h1>Bot VIP Online!</h1><p>Status: Operacional.</p>`)
 })
 
 // TELEGRAM WEBHOOK
 app.post("/telegram", async (req, res) => {
   const { message, callback_query } = req.body
-  res.sendStatus(200) // Responde OK imediatamente para o Telegram
+  res.sendStatus(200)
 
   try {
     const chatId = message?.chat?.id || callback_query?.message?.chat?.id
@@ -50,7 +50,7 @@ app.post("/telegram", async (req, res) => {
       })
     }
 
-    // 2. Escolha de Grupo (BR ou INT)
+    // 2. Escolha de Grupo
     if (callbackData === "plans_br" || callbackData === "plans_int") {
       const groupKey = callbackData.split("_")[1]
       const config = getPlansConfig()
@@ -65,7 +65,7 @@ app.post("/telegram", async (req, res) => {
       return await sendMessage(chatId, "Escolha seu plano:", { inline_keyboard: keyboard })
     }
 
-    // 3. Voltar para o menu inicial
+    // 3. Voltar
     if (callbackData === "back_to_start") {
       return await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
@@ -76,63 +76,64 @@ app.post("/telegram", async (req, res) => {
       })
     }
 
-    // 4. Clique no Plano (Onde estava travando)
+    // 4. Clique no Plano (CORREÇÃO DEFINITIVA)
     if (callbackData && callbackData.startsWith("buy_")) {
       const parts = callbackData.split("_")
       const groupKey = parts[1]
       const planKey = parts[2]
       
-      console.log(`Clique recebido: Grupo=${groupKey}, Plano=${planKey} de @${username}`)
+      console.log(`Compra: ${groupKey}/${planKey} por @${username}`)
 
-      // RESPOSTA IMEDIATA AO CLIENTE (Não espera o banco de dados)
+      // Resposta instantânea (Blindagem contra crash)
       await sendMessage(chatId, "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat.")
 
-      // SALVA NO BANCO EM SEGUNDO PLANO (Sem travar o bot)
+      // Salva no banco de forma segura
       if (mongoose.connection.readyState === 1) {
-        const PendingPayment = mongoose.model("PendingPayment")
-        PendingPayment.findByIdAndUpdate(
-          chatId,
-          { _id: chatId, userId, userName: username, groupKey, planKey, status: "awaiting_receipt" },
-          { upsert: true, new: true }
-        ).catch(e => console.error("Erro ao salvar no DB (segundo plano):", e.message))
+        try {
+          const PendingPayment = mongoose.model("PendingPayment")
+          await PendingPayment.findByIdAndUpdate(
+            chatId,
+            { _id: chatId, userId, userName: username, groupKey, planKey, status: "awaiting_receipt" },
+            { upsert: true, new: true }
+          )
+        } catch (e) { console.error("Erro banco:", e.message) }
       }
       return
     }
 
-    // 5. Recebimento de Comprovante
+    // 5. Comprovante
     if (message?.photo || message?.document) {
       if (mongoose.connection.readyState === 1) {
-        const PendingPayment = mongoose.model("PendingPayment")
-        const payment = await PendingPayment.findById(chatId)
+        try {
+          const PendingPayment = mongoose.model("PendingPayment")
+          const payment = await PendingPayment.findById(chatId)
 
-        if (payment && payment.status === "awaiting_receipt") {
-          await sendMessage(chatId, "✅ Comprovante recebido com sucesso!\n\n🕒 **Horário de Atendimento:**\nAs aprovações são feitas todos os dias das **09:00 às 22:00**.\n\nAguarde um momento, em breve seu acesso será liberado!")
+          if (payment && payment.status === "awaiting_receipt") {
+            await sendMessage(chatId, "✅ Comprovante recebido!\n\n🕒 **Atendimento:** 09:00 às 22:00 todos os dias.\n\nAguarde, em breve seu acesso será liberado!")
 
-          if (OWNER_TELEGRAM_ID) {
-            await sendMessage(OWNER_TELEGRAM_ID, `🔔 NOVO COMPROVANTE\nUsuário: @${username}\nID: ${chatId}\nPlano: ${payment.planKey} (${payment.groupKey.toUpperCase()})\n\nPara aprovar, use:\n\`/aprovar ${chatId}\``)
-            
-            await axios.post(`${TELEGRAM_API}/forwardMessage`, {
-              chat_id: OWNER_TELEGRAM_ID,
-              from_chat_id: chatId,
-              message_id: message.message_id
-            }).catch(e => console.error("Erro no forward:", e.message))
+            if (OWNER_TELEGRAM_ID) {
+              await sendMessage(OWNER_TELEGRAM_ID, `🔔 NOVO COMPROVANTE\nUsuário: @${username}\nID: ${chatId}\nPlano: ${payment.planKey} (${payment.groupKey.toUpperCase()})\n\nPara aprovar:\n\`/aprovar ${chatId}\``)
+              await axios.post(`${TELEGRAM_API}/forwardMessage`, {
+                chat_id: OWNER_TELEGRAM_ID,
+                from_chat_id: chatId,
+                message_id: message.message_id
+              }).catch(e => console.log("Erro forward"))
+            }
           }
-        }
+        } catch (e) { console.log("Erro processar comprovante") }
       }
       return
     }
 
-    // 6. Lógica de Aprovação
+    // 6. Aprovação
     if (text.startsWith("/aprovar")) {
       await handleApproval(chatId, userId, username, text)
     }
 
   } catch (err) {
-    console.error("Erro crítico no webhook:", err.message)
+    console.error("Erro Webhook:", err.message)
   }
 })
-
-// --- FUNÇÕES DE APOIO --- //
 
 async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
   if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return
@@ -141,25 +142,23 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
   if (parts.length < 2) return await sendMessage(adminChatId, "Use: /aprovar <ID>")
 
   const clientId = parts[1]
-  const PendingPayment = mongoose.model("PendingPayment")
-  const Subscription = mongoose.model("Subscription")
-  const payment = await PendingPayment.findById(clientId)
-
-  if (!payment) return await sendMessage(adminChatId, `Pagamento não encontrado para o ID: ${clientId}`)
-
-  const plansConfig = getPlansConfig()
-  const groupConfig = plansConfig[payment.groupKey]
-  const plan = groupConfig?.plans[payment.planKey]
-  const groupId = groupConfig?.group_id
-
-  if (!plan || !groupId) return await sendMessage(adminChatId, "Erro: Configuração de plano/grupo inválida.")
+  if (mongoose.connection.readyState !== 1) return await sendMessage(adminChatId, "Banco offline.")
 
   try {
-    const expire = Math.floor(Date.now() / 1000) + (30 * 60)
+    const PendingPayment = mongoose.model("PendingPayment")
+    const Subscription = mongoose.model("Subscription")
+    const payment = await PendingPayment.findById(clientId)
+
+    if (!payment) return await sendMessage(adminChatId, "ID não encontrado.")
+
+    const config = getPlansConfig()
+    const plan = config[payment.groupKey]?.plans[payment.planKey]
+    const groupId = config[payment.groupKey]?.group_id
+
     const r = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
       chat_id: groupId,
       member_limit: 1,
-      expire_date: expire
+      expire_date: Math.floor(Date.now() / 1000) + 1800
     })
     const invite = r.data.result.invite_link
 
@@ -170,123 +169,39 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
       { upsert: true }
     )
 
-    await sendMessage(clientId, "✅ Pagamento aprovado! Bem-vindo(a) ao grupo VIP!", { 
-      inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] 
-    })
+    await sendMessage(clientId, "✅ Pagamento aprovado!", { inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] })
     await PendingPayment.deleteOne({ _id: clientId })
-    await sendMessage(adminChatId, `✅ Sucesso! @${payment.userName} aprovado.`)
-
+    await sendMessage(adminChatId, `✅ @${payment.userName} aprovado!`)
   } catch (e) {
-    console.error("Erro na aprovação:", e.message)
-    await sendMessage(adminChatId, "Erro ao gerar link. Verifique as permissões do bot.")
+    await sendMessage(adminChatId, "Erro na aprovação. Verifique se o bot é admin.")
   }
 }
 
 function getPlansConfig() {
   return {
-    br: {
-      group_id: VIP_BR_GROUP_ID,
-      plans: {
-        monthly: { label: "Mensal", price_display: "R$ 29,90", days: 30 },
-        quarterly: { label: "Trimestral", price_display: "R$ 76,24", days: 90 },
-        semiannual: { label: "Semestral", price_display: "R$ 134,55", days: 180 }
-      }
-    },
-    int: {
-      group_id: VIP_INT_GROUP_ID,
-      plans: {
-        monthly: { label: "Monthly", price_display: "$11", days: 30 },
-        quarterly: { label: "Quarterly", price_display: "$28", days: 90 },
-        semiannual: { label: "Semiannual", price_display: "$49", days: 180 }
-      }
-    }
+    br: { group_id: VIP_BR_GROUP_ID, plans: { monthly: { label: "Mensal", price_display: "R$ 29,90", days: 30 }, quarterly: { label: "Trimestral", price_display: "R$ 76,24", days: 90 }, semiannual: { label: "Semestral", price_display: "R$ 134,55", days: 180 } } },
+    int: { group_id: VIP_INT_GROUP_ID, plans: { monthly: { label: "Monthly", price_display: "$11", days: 30 }, quarterly: { label: "Quarterly", price_display: "$28", days: 90 }, semiannual: { label: "Semiannual", price_display: "$49", days: 180 } } }
   }
 }
 
 async function sendMessage(chatId, text, reply_markup = null) {
-  try {
-    await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text, reply_markup, parse_mode: "Markdown" })
-  } catch (e) {
-    console.error(`Erro ao enviar mensagem para ${chatId}:`, e.message)
-  }
+  try { await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text, reply_markup, parse_mode: "Markdown" }) } catch (e) {}
 }
-
-// --- INICIALIZAÇÃO --- //
 
 async function connectServices() {
   try {
     if (MONGODB_URI) {
       await mongoose.connect(MONGODB_URI)
-      if (!mongoose.models.PendingPayment) {
-        mongoose.model("PendingPayment", new mongoose.Schema({ _id: Number, userId: Number, userName: String, groupKey: String, planKey: String, status: String, timestamp: { type: Date, default: Date.now } }))
-      }
-      if (!mongoose.models.Subscription) {
-        mongoose.model("Subscription", new mongoose.Schema({ _id: Number, userId: Number, chatId: Number, groupKey: String, planKey: String, expiresAt: Date, status: String }))
-      }
-      console.log("MongoDB OK")
+      const schemaP = new mongoose.Schema({ _id: Number, userId: Number, userName: String, groupKey: String, planKey: String, status: String, timestamp: { type: Date, default: Date.now } })
+      const schemaS = new mongoose.Schema({ _id: Number, userId: Number, chatId: Number, groupKey: String, planKey: String, expiresAt: Date, status: String })
+      if (!mongoose.models.PendingPayment) mongoose.model("PendingPayment", schemaP)
+      if (!mongoose.models.Subscription) mongoose.model("Subscription", schemaS)
     }
-    if (WEBHOOK_BASE_URL && BOT_TOKEN) {
-      await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_BASE_URL}/telegram`)
-      console.log("Webhook OK")
-    }
-  } catch (e) { console.error("Erro na inicialização:", e.message) }
+    if (WEBHOOK_BASE_URL && BOT_TOKEN) await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_BASE_URL}/telegram`)
+  } catch (e) {}
 }
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Servidor rodando na porta ${PORT}`)
-  connectServices()
-})        await sendMessage(chatId, "Escolha seu plano:", { inline_keyboard: keyboard })
-      }
-    }
-
-    // 3. Voltar para o menu inicial
-    if (callbackData === "back_to_start") {
-      await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
-        inline_keyboard: [
-          [{ text: "VIP BR 🇧🇷", callback_data: "plans_br" }],
-          [{ text: "VIP INT 🌎", callback_data: "plans_int" }],
-          [{ text: "Acessar meu Privacy 🔥", url: PRIVACY_PROFILE_URL }]
-        ]
-      })
-    }
-
-    // 4. Lógica de Compra (Clique no Plano - Onde estava o erro)
-    if (callbackData && callbackData.startsWith("buy_")) {
-      const parts = callbackData.split("_")
-      const groupKey = parts[1] // 'br' ou 'int'
-      const planKey = parts[2]  // 'monthly', 'quarterly', 'semiannual'
-      
-      console.log(`Botão de compra clicado: Grupo=${groupKey}, Plano=${planKey} por @${username}`)
-      
-      if (mongoose.connection.readyState === 1) {
-        const PendingPayment = mongoose.model("PendingPayment")
-        await PendingPayment.findByIdAndUpdate(
-          chatId,
-          { _id: chatId, userId, userName: username, groupKey, planKey, status: "awaiting_receipt" },
-          { upsert: true, new: true }
-        )
-        await sendMessage(chatId, "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat.")
-      } else {
-        await sendMessage(chatId, "O banco de dados está conectando, tente novamente em 1 minuto.")
-      }
-    }
-
-    // 5. Recebimento e Encaminhamento de Comprovante
-    if (message?.photo || message?.document) {
-      if (mongoose.connection.readyState === 1) {
-        const PendingPayment = mongoose.model("PendingPayment")
-        const payment = await PendingPayment.findById(chatId)
-
-        if (payment && payment.status === "awaiting_receipt") {
-          await sendMessage(chatId, "✅ Comprovante recebido com sucesso!\n\n🕒 **Horário de Atendimento:**\nAs aprovações são feitas todos os dias das **09:00 às 22:00**.\n\nAguarde um momento, em breve seu acesso será liberado!")
-
-          if (OWNER_TELEGRAM_ID) {
-            await sendMessage(OWNER_TELEGRAM_ID, `🔔 NOVO COMPROVANTE\nUsuário: @${username}\nID: ${chatId}\nPlano: ${payment.planKey} (${payment.groupKey.toUpperCase()})\n\nPara aprovar, use:\n\`/aprovar ${chatId}\``)
-            
-            await axios.post(`${TELEGRAM_API}/forwardMessage`, {
-              chat_id: OWNER_TELEGRAM_ID,
-              from_chat_id: chatId,
-              message_id: message.message_id
+app.listen(PORT, "0.0.0.0", () => { connectServices() })              message_id: message.message_id
             }).catch(e => console.error("Erro no forward:", e.message))
           }
         }
@@ -567,5 +482,6 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor na porta ${PORT}`)
   connectServices()
 })
+
 
 
