@@ -55,15 +55,15 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 2. Escolha de Grupo (BR ou INT)
+    // 2. Escolha de Grupo
     if (callbackData === "p_br" || callbackData === "p_int") {
-      const groupKey = callbackData.split("_")[1]; // 'br' ou 'int'
+      const groupKey = callbackData.split("_")[1];
       const config = getPlansConfig();
       const groupConfig = config[groupKey];
       
       const keyboard = Object.keys(groupConfig.plans).map(key => ([{
         text: `${groupConfig.plans[key].label} - ${groupConfig.plans[key].price_display}`,
-        callback_data: `b_${groupKey}_${key}` // Ex: b_br_m, b_int_q
+        callback_data: `b_${groupKey}_${key}`
       }]));
       keyboard.push([{ text: "⬅️ Voltar", callback_data: "back" }]);
       
@@ -71,7 +71,7 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 3. Voltar para o menu inicial
+    // 3. Voltar
     if (callbackData === "back") {
       await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
@@ -83,21 +83,20 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 4. Clique no Plano (CHAVES CURTAS: b_br_m, b_br_q, b_br_s, b_int_m, b_int_q, b_int_s)
+    // 4. Clique no Plano (RESPOSTA SIMPLIFICADA)
     if (callbackData && callbackData.startsWith("b_")) {
       const parts = callbackData.split("_");
-      const groupKey = parts[1]; // 'br' ou 'int'
-      const planShortKey = parts[2]; // 'm', 'q' ou 's'
-      
+      const groupKey = parts[1];
+      const planShortKey = parts[2];
       const keyMap = { 'm': 'monthly', 'q': 'quarterly', 's': 'semiannual' };
       const planKey = keyMap[planShortKey] || planShortKey;
 
       console.log(`[COMPRA] Grupo=${groupKey}, Plano=${planKey}`);
 
-      // Resposta imediata ao cliente
+      // Resposta sem formatação para garantir o envio
       await sendMessage(chatId, "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat.");
 
-      // Salva no banco em segundo plano
+      // Banco em segundo plano
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment");
         PendingPayment.findByIdAndUpdate(
@@ -111,10 +110,10 @@ app.post("/telegram", async (req, res) => {
 
     // 5. Recebimento de Comprovante
     if (message && (message.photo || message.document)) {
-      await sendMessage(chatId, "✅ Comprovante recebido!\n\n🕒 **Atendimento:** 09:00 às 22:00 todos os dias.\n\nAguarde, em breve seu acesso será liberado!");
+      await sendMessage(chatId, "Comprovante recebido com sucesso! As aprovacoes sao feitas todos os dias das 09:00 as 22:00. Aguarde a liberacao!");
 
       if (OWNER_TELEGRAM_ID) {
-        await sendMessage(OWNER_TELEGRAM_ID, `🔔 NOVO COMPROVANTE\nUsuário: @${username}\nID: ${chatId}\n\nPara aprovar:\n\`/aprovar ${chatId}\``);
+        await sendMessage(OWNER_TELEGRAM_ID, `NOVO COMPROVANTE\nUsuario: @${username}\nID: ${chatId}\nPara aprovar use: /aprovar ${chatId}`);
         await axios.post(`${TELEGRAM_API}/forwardMessage`, {
           chat_id: OWNER_TELEGRAM_ID,
           from_chat_id: chatId,
@@ -138,10 +137,8 @@ app.post("/telegram", async (req, res) => {
 
 async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
   if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
-
   const parts = text.split(" ");
   if (parts.length < 2) return await sendMessage(adminChatId, "Use: /aprovar <ID>");
-
   const clientId = parts[1];
   if (mongoose.connection.readyState !== 1) return await sendMessage(adminChatId, "Banco offline.");
 
@@ -149,11 +146,10 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
     const PendingPayment = mongoose.model("PendingPayment");
     const Subscription = mongoose.model("Subscription");
     const payment = await PendingPayment.findById(clientId);
-
-    if (!payment) return await sendMessage(adminChatId, "ID não encontrado.");
+    if (!payment) return await sendMessage(adminChatId, "ID nao encontrado.");
 
     const config = getPlansConfig();
-    const plan = config[payment.groupKey]?.plans[payment.planKey];
+    const plan = config[payment.groupKey]?.plans[payment.planKey === 'monthly' ? 'm' : payment.planKey === 'quarterly' ? 'q' : 's'];
     const groupId = config[payment.groupKey]?.group_id;
 
     const r = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
@@ -164,17 +160,13 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
     const invite = r.data.result.invite_link;
 
     const expires = new Date(Date.now() + plan.days * 86400000);
-    await Subscription.findByIdAndUpdate(
-      payment.userId,
-      { _id: payment.userId, userId: payment.userId, chatId: clientId, groupKey: payment.groupKey, planKey: payment.planKey, expiresAt: expires, status: "active" },
-      { upsert: true }
-    );
+    await Subscription.findByIdAndUpdate(payment.userId, { _id: payment.userId, userId: payment.userId, chatId: clientId, groupKey: payment.groupKey, planKey: payment.planKey, expiresAt: expires, status: "active" }, { upsert: true });
 
-    await sendMessage(clientId, "✅ Pagamento aprovado!", { inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] });
+    await sendMessage(clientId, "Pagamento aprovado! Clique no botao para entrar no grupo:", { inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] });
     await PendingPayment.deleteOne({ _id: clientId });
-    await sendMessage(adminChatId, `✅ @${payment.userName} aprovado!`);
+    await sendMessage(adminChatId, `Sucesso! @${payment.userName} aprovado.`);
   } catch (e) {
-    await sendMessage(adminChatId, "Erro na aprovação. Verifique as permissões.");
+    await sendMessage(adminChatId, "Erro na aprovacao. Verifique as permissoes.");
   }
 }
 
@@ -186,7 +178,13 @@ function getPlansConfig() {
 }
 
 async function sendMessage(chatId, text, reply_markup = null) {
-  try { await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text, reply_markup, parse_mode: "Markdown" }); } catch (e) {}
+  try { 
+    const payload = { chat_id: chatId, text: text };
+    if (reply_markup) payload.reply_markup = reply_markup;
+    await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+  } catch (e) { 
+    console.error(`ERRO ENVIO TELEGRAM (ChatID: ${chatId}):`, e.response ? e.response.data : e.message);
+  }
 }
 
 async function connectServices() {
