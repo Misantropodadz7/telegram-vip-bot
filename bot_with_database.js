@@ -137,17 +137,14 @@ const username = message?.from.username || callback?.from.username || "User"
 if (message?.text === "/start") {
 
   await axios.post(`${TELEGRAM_API}/sendMessage`, {
-
     chat_id: chatId,
     text: "Escolha seu grupo VIP",
-
     reply_markup: {
       inline_keyboard: [
         [{ text: "VIP BR", callback_data: "plans_br" }],
         [{ text: "VIP INT", callback_data: "plans_int" }]
       ]
     }
-
   })
 
 }
@@ -170,11 +167,11 @@ if (callback && callback.data.startsWith("plans_")) {
   })
 
   await axios.post(`${TELEGRAM_API}/sendMessage`, {
-
     chat_id: chatId,
     text: "Escolha seu plano",
-    reply_markup: { inline_keyboard: keyboard }
-
+    reply_markup: {
+      inline_keyboard: keyboard
+    }
   })
 
 }
@@ -391,6 +388,7 @@ console.log("Erro start:", err.message)
 }
 
 start()
+
 
 
 
