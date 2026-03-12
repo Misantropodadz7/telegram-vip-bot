@@ -16,7 +16,7 @@ const TRUST_WALLET_ADDRESS = process.env.TRUST_WALLET_ADDRESS?.trim() || ""
 const LIVEPIX_URL = process.env.LIVEPIX_URL?.trim() || ""
 const OWNER_TELEGRAM_ID = process.env.OWNER_TELEGRAM_ID?.trim() || ""
 
-// GRUPOS (Ajustado para os nomes no seu Railway)
+// GRUPOS
 const VIP_BR_GROUP_ID = process.env.GROUP_ID_BR?.trim() || ""
 const VIP_INT_GROUP_ID = process.env.GROUP_ID_INT?.trim() || ""
 
@@ -93,7 +93,7 @@ const plansConfig = {
     plans: {
       monthly: { label: "Monthly", price_display: "$11", price_usd: "11", days: 30 },
       quarterly: { label: "Quarterly", price_display: "$28", price_usd: "28", days: 90 },
-      semiannual: { label: "Semiannual", price_display: "$49", price_usd: "49", days: 180 }
+      semiannual: { label: "Semestral", price_display: "$49", price_usd: "49", days: 180 }
     }
   }
 }
@@ -305,30 +305,43 @@ async function start() {
       process.exit(1)
     }
 
-    // Tratamento para senhas com caracteres especiais como @
+    // Lógica robusta para tratar caracteres especiais na senha
     let connectionUri = MONGODB_URI;
-    if (MONGODB_URI.includes(":") && MONGODB_URI.includes("@")) {
+    
+    // Se a URI for do MongoDB Atlas (contém @ e +srv)
+    if (MONGODB_URI.includes("@") && MONGODB_URI.includes("mongodb+srv://")) {
       try {
-        const parts = MONGODB_URI.split("@");
-        const authPart = parts[0]; // mongodb+srv://user:password
-        const hostPart = parts.slice(1).join("@"); // host.mongodb.net/...
-        
-        if (authPart.includes("://")) {
-          const protocol = authPart.split("://")[0];
-          const credentials = authPart.split("://")[1];
-          if (credentials.includes(":")) {
-            const user = credentials.split(":")[0];
-            const password = credentials.split(":").slice(1).join(":");
-            connectionUri = `${protocol}://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${hostPart}`;
+        // Extrai o protocolo
+        const protocol = "mongodb+srv://";
+        // Remove o protocolo da string
+        const withoutProtocol = MONGODB_URI.replace(protocol, "");
+        // Separa as credenciais do host (o primeiro @ separa as credenciais do host)
+        const atIndex = withoutProtocol.indexOf("@");
+        if (atIndex !== -1) {
+          const credentials = withoutProtocol.substring(0, atIndex);
+          const host = withoutProtocol.substring(atIndex + 1);
+          
+          // Separa usuário e senha
+          const colonIndex = credentials.indexOf(":");
+          if (colonIndex !== -1) {
+            const user = credentials.substring(0, colonIndex);
+            const password = credentials.substring(colonIndex + 1);
+            
+            // Reconstrói a URI codificando usuário e senha
+            connectionUri = `${protocol}${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}`;
           }
         }
       } catch (e) {
-        console.log("Aviso: Não foi possível codificar a URI, tentando conexão direta.");
+        console.log("Aviso: Erro ao processar URI, tentando conexão direta.");
       }
     }
 
-    await mongoose.connect(connectionUri)
-    console.log("MongoDB conectado")
+    console.log("Tentando conectar ao MongoDB...");
+    await mongoose.connect(connectionUri, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    })
+    console.log("MongoDB conectado com sucesso")
 
     await initializeGoogleSheets()
 
@@ -341,11 +354,11 @@ async function start() {
       console.log("Servidor rodando porta", PORT)
     })
   } catch (err) {
-    console.log("Erro start:", err.message)
+    console.error("Erro fatal no início do bot:", err.message)
+    // Não encerra o processo imediatamente para permitir ver o log no Railway
+    setTimeout(() => process.exit(1), 5000);
   }
 }
 
 start()
-
-
 
