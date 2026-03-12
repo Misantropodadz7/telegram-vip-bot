@@ -2,19 +2,15 @@ const express = require("express")
 const bodyParser = require("body-parser")
 const axios = require("axios")
 const mongoose = require("mongoose")
-const { google } = require("googleapis")
 
 const app = express()
-
-// CRUCIAL: No Railway, a porta DEVE vir da variável PORT.
-// Se não existir, usamos 3000 como fallback, mas o Railway sempre injeta.
 const PORT = process.env.PORT || 3000
 
 // TELEGRAM
 const BOT_TOKEN = process.env.BOT_TOKEN
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
-// VARIÁVEIS DE AMBIENTE (Limpando espaços em branco)
+// VARIÁVEIS DE AMBIENTE
 const OWNER_TELEGRAM_ID = process.env.OWNER_TELEGRAM_ID?.trim() || ""
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL?.trim() || ""
 const MONGODB_URI = process.env.MONGODB_URI?.trim() || ""
@@ -22,139 +18,233 @@ const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID?.trim() || ""
 const VIP_BR_GROUP_ID = process.env.GROUP_ID_BR?.trim() || ""
 const VIP_INT_GROUP_ID = process.env.GROUP_ID_INT?.trim() || ""
 
-let sheetsClient = null
-
-// MIDDLEWARES - Configuração robusta do BodyParser
+// MIDDLEWARES
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: true }))
 
-// ROTA DE TESTE (Para você abrir no navegador e ver se o Railway está OK)
+// ROTA DE TESTE
 app.get("/", (req, res) => {
   res.send(`<h1>Bot Online!</h1><p>Porta: ${PORT}</p><p>Status: Ativo e aguardando Telegram.</p>`)
 })
 
-// ROTA DE SAÚDE (Usada por alguns serviços de monitoramento)
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok", uptime: process.uptime() })
-})
-
-// TELEGRAM WEBHOOK - O coração do Bot
+// TELEGRAM WEBHOOK
 app.post("/telegram", async (req, res) => {
-  // Log imediato para confirmarmos no painel do Railway
-  console.log("--- NOVO UPDATE RECEBIDO DO TELEGRAM ---")
+  console.log("--- NOVO UPDATE RECEBIDO ---")
   console.log(JSON.stringify(req.body, null, 2))
 
   const { message, callback_query } = req.body
-  const callback = callback_query
-
-  // Responde OK imediatamente para o Telegram não reenviar a mesma mensagem (evita loop)
-  res.sendStatus(200)
+  res.sendStatus(200) // Responde OK imediatamente
 
   try {
-    const chatId = message?.chat?.id || callback?.message?.chat?.id
-    const userId = message?.from?.id || callback?.from?.id
-    const username = message?.from?.username || callback?.from?.username || "User"
+    const chatId = message?.chat?.id || callback_query?.message?.chat?.id
+    const userId = message?.from?.id || callback_query?.from?.id
+    const username = message?.from?.username || callback_query?.from?.username || "User"
     const text = message?.text || ""
+    const callbackData = callback_query?.data
 
     // Lógica do Comando /start
     if (text.startsWith("/start")) {
-      console.log(`Processando /start para: ${username} (${userId})`)
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: "Escolha seu grupo VIP:",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "VIP BR 🇧🇷", callback_data: "plans_br" }],
-            [{ text: "VIP INT 🌎", callback_data: "plans_int" }]
-          ]
-        }
-      })
+      await handleStart(chatId, username, userId)
     }
 
-    // Lógica de Planos (Callback Query)
-    if (callback && callback.data.startsWith("plans_")) {
-      const groupKey = callback.data.split("_")[1]
-      const plans = {
-        br: [
-          { label: "Mensal", price: "R$ 29,90", key: "monthly" },
-          { label: "Trimestral", price: "R$ 76,24", key: "quarterly" },
-          { label: "Semestral", price: "R$ 134,55", key: "semiannual" }
-        ],
-        int: [
-          { label: "Monthly", price: "$11", key: "monthly" },
-          { label: "Quarterly", price: "$28", key: "quarterly" },
-          { label: "Semiannual", price: "$49", key: "semiannual" }
-        ]
-      }
-
-      const keyboard = plans[groupKey].map(p => ([{
-        text: `${p.label} - ${p.price}`,
-        callback_data: `buy_${groupKey}_${p.key}`
-      }]))
-
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: "Escolha seu plano:",
-        reply_markup: { inline_keyboard: keyboard }
-      })
+    // Lógica de Planos (Callback)
+    if (callbackData?.startsWith("plans_")) {
+      const groupKey = callbackData.split("_")[1]
+      await handlePlans(chatId, groupKey)
     }
 
-    // Lógica de Compra (Início do Checkout)
-    if (callback && callback.data.startsWith("buy_")) {
-      const [, groupKey, planKey] = callback.data.split("_")
-      
-      // Salva intenção de compra no Banco (se conectado)
-      if (mongoose.connection.readyState === 1) {
-        const PendingPayment = mongoose.model("PendingPayment")
-        await PendingPayment.findByIdAndUpdate(
-          chatId,
-          { _id: chatId, userId, userName: username, groupKey, planKey },
-          { upsert: true }
-        )
-      }
-
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat."
-      })
+    // Lógica de Compra (Callback)
+    if (callbackData?.startsWith("buy_")) {
+      const [, groupKey, planKey] = callbackData.split("_")
+      await handleBuy(chatId, userId, username, groupKey, planKey)
     }
 
     // Recebimento de Comprovante
     if (message?.photo || message?.document) {
-      console.log(`Comprovante recebido de ${username}`)
-      if (OWNER_TELEGRAM_ID) {
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: OWNER_TELEGRAM_ID,
-          text: `🔔 NOVO COMPROVANTE\nUsuário: @${username}\nID: ${chatId}\nVerifique o chat com o bot.`
-        })
-      }
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: "Comprovante recebido com sucesso! Aguarde a aprovação manual do administrador."
-      })
+      await handleReceipt(chatId, username)
+    }
+
+    // Lógica de Aprovação
+    if (text.startsWith("/aprovar")) {
+      await handleApproval(chatId, userId, username, text)
     }
 
   } catch (err) {
-    console.error("Erro no processamento do Telegram:", err.message)
+    console.error("Erro GERAL no processamento do webhook:", err.message)
+    if (OWNER_TELEGRAM_ID) {
+      await notifyAdmin(`🚨 Erro crítico no bot: ${err.message}`)
+    }
   }
 })
 
-// INICIALIZAÇÃO DE BANCO E GOOGLE (Assíncrona para não travar o Railway)
+// --- FUNÇÕES DE LÓGICA --- //
+
+async function handleStart(chatId, username, userId) {
+  console.log(`Processando /start para: ${username} (${userId})`)
+  await sendMessage(chatId, "Escolha seu grupo VIP:", {
+    inline_keyboard: [
+      [{ text: "VIP BR 🇧🇷", callback_data: "plans_br" }],
+      [{ text: "VIP INT 🌎", callback_data: "plans_int" }]
+    ]
+  })
+}
+
+async function handlePlans(chatId, groupKey) {
+  const plans = getPlansConfig()[groupKey]?.plans
+  if (!plans) return
+
+  const keyboard = Object.keys(plans).map(key => ([{
+    text: `${plans[key].label} - ${plans[key].price_display}`,
+    callback_data: `buy_${groupKey}_${key}`
+  }]))
+
+  await sendMessage(chatId, "Escolha seu plano:", { inline_keyboard: keyboard })
+}
+
+async function handleBuy(chatId, userId, username, groupKey, planKey) {
+  if (mongoose.connection.readyState !== 1) {
+    return await sendMessage(chatId, "O banco de dados está conectando, tente novamente em 1 minuto.")
+  }
+  const PendingPayment = mongoose.model("PendingPayment")
+  await PendingPayment.findByIdAndUpdate(
+    chatId,
+    { _id: chatId, userId, userName: username, groupKey, planKey },
+    { upsert: true, new: true }
+  )
+  await sendMessage(chatId, "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat.")
+}
+
+async function handleReceipt(chatId, username) {
+  console.log(`Comprovante recebido de ${username}`)
+  await notifyAdmin(`🔔 NOVO COMPROVANTE\nUsuário: @${username}\nID: ${chatId}\nUse: /aprovar ${chatId}`)
+  await sendMessage(chatId, "Comprovante recebido! Aguarde a aprovação manual.")
+}
+
+async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
+  console.log(`Comando /aprovar recebido de ${adminUsername}`)
+  if (adminUserId.toString() !== OWNER_TELEGRAM_ID) {
+    return console.log(`Tentativa de aprovação por não-admin: ${adminUsername}`)
+  }
+
+  const parts = text.split(" ")
+  if (parts.length < 2 || !/^[0-9]+$/.test(parts[1])) {
+    return await sendMessage(adminChatId, "Formato inválido. Use: /aprovar <ID_DO_CLIENTE>")
+  }
+
+  const clientId = parseInt(parts[1])
+
+  if (mongoose.connection.readyState !== 1) {
+    return await sendMessage(adminChatId, "Banco de dados offline.")
+  }
+
+  const PendingPayment = mongoose.model("PendingPayment")
+  const Subscription = mongoose.model("Subscription")
+  const payment = await PendingPayment.findById(clientId)
+
+  if (!payment) {
+    return await sendMessage(adminChatId, `Nenhum pagamento pendente para o ID: ${clientId}`)
+  }
+
+  const plansConfig = getPlansConfig()
+  const plan = plansConfig[payment.groupKey]?.plans[payment.planKey]
+  const groupId = plansConfig[payment.groupKey]?.group_id
+
+  if (!plan || !groupId) {
+    return await notifyAdmin(`Erro: Plano ou Grupo não encontrado para ${payment.groupKey}/${payment.planKey}`)
+  }
+
+  console.log(`Gerando link para o grupo ${groupId}...`)
+  const invite = await generateInvite(groupId)
+
+  if (!invite) {
+    return await sendMessage(adminChatId, `Erro ao gerar link para o cliente ${clientId}. Verifique as permissões do bot no grupo.`)
+  }
+
+  const expires = new Date(Date.now() + plan.days * 86400000)
+  await Subscription.findByIdAndUpdate(
+    payment.userId,
+    { _id: payment.userId, userId: payment.userId, chatId: clientId, groupKey: payment.groupKey, planKey: payment.planKey, expiresAt: expires, status: "active" },
+    { upsert: true, new: true }
+  )
+
+  await sendMessage(clientId, "✅ Pagamento aprovado! Bem-vindo(a)!", { inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] })
+  await PendingPayment.deleteOne({ _id: clientId })
+  await sendMessage(adminChatId, `✅ Pagamento de @${payment.userName} (ID: ${clientId}) aprovado!`)
+}
+
+// --- FUNÇÕES UTILITÁRIAS --- //
+
+function getPlansConfig() {
+  return {
+    br: {
+      group_id: VIP_BR_GROUP_ID,
+      plans: {
+        monthly: { label: "Mensal", price_display: "R$ 29,90", days: 30 },
+        quarterly: { label: "Trimestral", price_display: "R$ 76,24", days: 90 },
+        semiannual: { label: "Semestral", price_display: "R$ 134,55", days: 180 }
+      }
+    },
+    int: {
+      group_id: VIP_INT_GROUP_ID,
+      plans: {
+        monthly: { label: "Monthly", price_display: "$11", days: 30 },
+        quarterly: { label: "Quarterly", price_display: "$28", days: 90 },
+        semiannual: { label: "Semestral", price_display: "$49", days: 180 }
+      }
+    }
+  }
+}
+
+async function sendMessage(chatId, text, reply_markup = null) {
+  try {
+    await axios.post(`${TELEGRAM_API}/sendMessage`, { chat_id: chatId, text, reply_markup })
+  } catch (e) {
+    console.error(`Erro ao enviar mensagem para ${chatId}:`, e.message)
+  }
+}
+
+async function notifyAdmin(text) {
+  if (OWNER_TELEGRAM_ID) {
+    await sendMessage(OWNER_TELEGRAM_ID, text)
+  }
+}
+
+async function generateInvite(groupId) {
+  try {
+    const expire = Math.floor(Date.now() / 1000) + (30 * 60) // 30 minutos
+    const r = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
+      chat_id: groupId,
+      member_limit: 1,
+      expire_date: expire
+    })
+    return r.data.result.invite_link
+  } catch (err) {
+    console.error(`Erro ao gerar link para o grupo ${groupId}:`, err.message)
+    await notifyAdmin(`🚨 Falha ao gerar link para o grupo ${groupId}. O bot tem permissão de admin para criar convites?`)
+    return null
+  }
+}
+
+// --- INICIALIZAÇÃO --- //
+
 async function connectServices() {
   try {
+    // 1. Conectar MongoDB
     if (MONGODB_URI) {
       console.log("Conectando ao MongoDB...")
       await mongoose.connect(MONGODB_URI)
       console.log("MongoDB OK")
+
+      // 2. Definir TODOS os Schemas e Modelos
+      const pendingPaymentSchema = new mongoose.Schema({ _id: Number, userId: Number, userName: String, groupKey: String, planKey: String, timestamp: { type: Date, default: Date.now } })
+      const subscriptionSchema = new mongoose.Schema({ _id: Number, userId: Number, chatId: Number, groupKey: String, planKey: String, expiresAt: Date, status: String })
       
-      // Define Schemas se necessário (exemplo rápido)
-      if (!mongoose.models.PendingPayment) {
-        mongoose.model("PendingPayment", new mongoose.Schema({
-          _id: Number, userId: Number, userName: String, groupKey: String, planKey: String, timestamp: { type: Date, default: Date.now }
-        }))
-      }
+      if (!mongoose.models.PendingPayment) mongoose.model("PendingPayment", pendingPaymentSchema)
+      if (!mongoose.models.Subscription) mongoose.model("Subscription", subscriptionSchema)
+      console.log("Modelos do DB definidos.")
     }
 
+    // 3. Configurar Webhook
     if (WEBHOOK_BASE_URL && BOT_TOKEN) {
       const url = `${WEBHOOK_BASE_URL}/telegram`
       console.log(`Configurando Webhook para: ${url}`)
@@ -162,21 +252,13 @@ async function connectServices() {
       console.log("Status Webhook Telegram:", res.data.description)
     }
   } catch (e) {
-    console.error("Erro ao conectar serviços:", e.message)
+    console.error("Erro CRÍTICO ao conectar serviços:", e.message)
   }
 }
 
-// INICIALIZAÇÃO DO SERVIDOR (A parte mais importante para o Erro 502)
-// Ouvir em 0.0.0.0 é obrigatório.
 const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`>>> SERVIDOR RODANDO EM 0.0.0.0:${PORT} <<<`)
-  console.log("Railway deve agora detectar a aplicação como saudável.")
-  
-  // Inicia as conexões pesadas DEPOIS que o servidor já está "vivo"
   connectServices()
 })
 
-// Tratamento de erros do servidor
-server.on('error', (e) => {
-  console.error("ERRO NO SERVIDOR EXPRESS:", e.message)
-})
+server.on('error', (e) => console.error("ERRO NO SERVIDOR EXPRESS:", e.message))
