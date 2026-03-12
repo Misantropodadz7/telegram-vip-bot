@@ -1,6 +1,10 @@
 const express = require("express")
 const bodyParser = require("body-parser")
 const axios = require("axios")
+const mongoose = require("mongoose")
+const { google } = require("googleapis")
+const fs = require("fs")
+const path = require("path")
 
 const app = express()
 const PORT = process.env.PORT || 3000
@@ -21,6 +25,37 @@ const VIP_INT_GROUP_ID = process.env.VIP_INT_GROUP_ID?.trim() || ""
 // ─── Outros ENVs ──────────────────────────────────────────────────────────────
 const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL?.trim() || ""
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL?.trim() || ""
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/vip_bot"
+const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID || ""
+
+// ─── Google Sheets Credentials ────────────────────────────────────────────────
+let sheetsClient = null
+let authClient = null
+
+async function initializeGoogleSheets() {
+  try {
+    const keyFile = process.env.GOOGLE_CREDENTIALS_PATH || "./google-credentials.json"
+    
+    if (!fs.existsSync(keyFile)) {
+      console.warn("⚠️ Google Sheets credentials file not found. Skipping Google Sheets integration.")
+      return false
+    }
+
+    const credentials = JSON.parse(fs.readFileSync(keyFile, "utf8"))
+    
+    authClient = new google.auth.GoogleAuth({
+      keyFile,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    })
+
+    sheetsClient = google.sheets({ version: "v4", auth: authClient })
+    console.log("✅ Google Sheets API initialized successfully")
+    return true
+  } catch (error) {
+    console.error("❌ Error initializing Google Sheets:", error.message)
+    return false
+  }
+}
 
 // ─── Configuração de planos ───────────────────────────────────────────────────
 const plansConfig = {
@@ -44,55 +79,205 @@ const plansConfig = {
   },
 }
 
-// ─── Armazenamento em memória ──────────────────────────────────────────────────
-const pendingPayments = new Map()
-const userSubscriptions = new Map()
-const removedUsers = new Map() // Rastrear usuários removidos para evitar duplicatas
+// ─── Mongoose Schemas ─────────────────────────────────────────────────────────
+
+// Schema para Pagamentos Pendentes
+const pendingPaymentSchema = new mongoose.Schema({
+  chatId: { type: Number, required: true, unique: true },
+  userId: { type: Number, required: true },
+  userName: String,
+  groupKey: { type: String, enum: ["br", "int"], required: true },
+  planKey: { type: String, required: true },
+  amount: String,
+  paymentMethod: { type: String, enum: ["crypto", "livepix"], default: null },
+  timestamp: { type: Date, default: Date.now },
+  expiresAt: { type: Date, default: () => new Date(Date.now() + 24 * 60 * 60 * 1000) },
+})
+
+// Schema para Assinaturas
+const subscriptionSchema = new mongoose.Schema({
+  userId: { type: Number, required: true, unique: true, index: true },
+  chatId: { type: Number, required: true },
+  userName: String,
+  groupKey: { type: String, enum: ["br", "int"], required: true },
+  planKey: { type: String, required: true },
+  activatedAt: { type: Date, default: Date.now },
+  expiresAt: { type: Date, required: true, index: true },
+  status: { type: String, enum: ["active", "expired", "cancelled"], default: "active" },
+  paymentMethod: { type: String, enum: ["crypto", "livepix"] },
+  renewalCount: { type: Number, default: 0 },
+})
+
+// Schema para Histórico de Removidos
+const removedUserSchema = new mongoose.Schema({
+  userId: { type: Number, required: true, unique: true },
+  groupKey: { type: String, enum: ["br", "int"], required: true },
+  removedAt: { type: Date, default: Date.now },
+  reason: { type: String, default: "subscription_expired" },
+})
+
+// Schema para Logs de Transações
+const transactionLogSchema = new mongoose.Schema({
+  userId: { type: Number, required: true },
+  action: { type: String, required: true },
+  details: mongoose.Schema.Types.Mixed,
+  timestamp: { type: Date, default: Date.now },
+})
+
+const PendingPayment = mongoose.model("PendingPayment", pendingPaymentSchema)
+const Subscription = mongoose.model("Subscription", subscriptionSchema)
+const RemovedUser = mongoose.model("RemovedUser", removedUserSchema)
+const TransactionLog = mongoose.model("TransactionLog", transactionLogSchema)
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(bodyParser.json())
 
-// ─── Verificar e remover assinaturas expiradas ────────────────────────────────
+// ─── Google Sheets Functions ──────────────────────────────────────────────────
+
 /**
- * Verifica todas as assinaturas e remove usuários cujas assinaturas expiraram
+ * Atualiza a planilha de monitoramento com dados de assinaturas
  */
-async function checkAndRemoveExpiredSubscriptions() {
-  const now = Date.now()
-  const usersToRemove = []
+async function updateMonitoringSheet() {
+  if (!sheetsClient || !GOOGLE_SHEETS_ID) return
 
-  // Encontrar todas as assinaturas expiradas
-  for (const [userId, subscription] of userSubscriptions.entries()) {
-    if (subscription.expiresAt <= now && !removedUsers.has(userId)) {
-      usersToRemove.push({ userId, subscription })
+  try {
+    const subscriptions = await Subscription.find({ status: "active" }).sort({ expiresAt: 1 })
+    
+    // Preparar dados para a planilha
+    const rows = [
+      ["ID do Usuário", "Nome", "Grupo", "Plano", "Ativada em", "Expira em", "Dias Restantes", "Status", "Método de Pagamento"],
+    ]
+
+    const now = Date.now()
+    
+    for (const sub of subscriptions) {
+      const daysRemaining = Math.ceil((sub.expiresAt - now) / (24 * 60 * 60 * 1000))
+      const activatedDate = new Date(sub.activatedAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })
+      const expiresDate = new Date(sub.expiresAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })
+      
+      rows.push([
+        sub.userId.toString(),
+        sub.userName || "N/A",
+        sub.groupKey.toUpperCase(),
+        sub.planKey,
+        activatedDate,
+        expiresDate,
+        daysRemaining.toString(),
+        sub.status,
+        sub.paymentMethod || "N/A",
+      ])
     }
+
+    // Atualizar a planilha
+    await sheetsClient.spreadsheets.values.clear({
+      spreadsheetId: GOOGLE_SHEETS_ID,
+      range: "Assinaturas!A1:I1000",
+    })
+
+    await sheetsClient.spreadsheets.values.update({
+      spreadsheetId: GOOGLE_SHEETS_ID,
+      range: "Assinaturas!A1",
+      valueInputOption: "RAW",
+      resource: { values: rows },
+    })
+
+    console.log("✅ Google Sheets atualizado com sucesso")
+  } catch (error) {
+    console.error("❌ Erro ao atualizar Google Sheets:", error.message)
   }
+}
 
-  // Remover usuários expirados
-  for (const { userId, subscription } of usersToRemove) {
-    try {
-      const groupId = plansConfig[subscription.groupKey].group_id
-      
-      // Tentar remover o usuário do grupo
-      const removed = await removeUserFromGroup(groupId, userId)
-      
-      if (removed) {
-        removedUsers.set(userId, {
-          removedAt: now,
-          groupKey: subscription.groupKey,
-        })
-        userSubscriptions.delete(userId)
+/**
+ * Adiciona uma linha ao histórico de removidos na planilha
+ */
+async function addRemovedUserToSheet(userId, groupKey, removedAt) {
+  if (!sheetsClient || !GOOGLE_SHEETS_ID) return
 
-        // Notificar o usuário
-        await notifyUserSubscriptionExpired(userId, subscription.groupKey)
+  try {
+    const values = [
+      [
+        userId.toString(),
+        groupKey.toUpperCase(),
+        new Date(removedAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+      ],
+    ]
 
-        // Notificar o proprietário
-        await notifyOwnerUserRemoved(userId, subscription.groupKey)
+    await sheetsClient.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEETS_ID,
+      range: "Removidos!A2",
+      valueInputOption: "RAW",
+      resource: { values },
+    })
 
-        console.log(`✅ Usuário ${userId} removido do grupo ${subscription.groupKey} por expiração de assinatura`)
+    console.log("✅ Usuário removido adicionado ao histórico da planilha")
+  } catch (error) {
+    console.error("❌ Erro ao adicionar usuário removido à planilha:", error.message)
+  }
+}
+
+// ─── Verificar e remover assinaturas expiradas ────────────────────────────────
+
+async function checkAndRemoveExpiredSubscriptions() {
+  try {
+    const now = Date.now()
+    
+    // Encontrar assinaturas expiradas
+    const expiredSubscriptions = await Subscription.find({
+      expiresAt: { $lte: new Date(now) },
+      status: "active",
+    })
+
+    for (const subscription of expiredSubscriptions) {
+      try {
+        const groupId = plansConfig[subscription.groupKey].group_id
+        
+        // Remover usuário do grupo
+        const removed = await removeUserFromGroup(groupId, subscription.userId)
+        
+        if (removed) {
+          // Atualizar status no banco de dados
+          subscription.status = "expired"
+          await subscription.save()
+
+          // Registrar remoção
+          await RemovedUser.create({
+            userId: subscription.userId,
+            groupKey: subscription.groupKey,
+            removedAt: new Date(),
+            reason: "subscription_expired",
+          })
+
+          // Adicionar ao histórico da planilha
+          await addRemovedUserToSheet(subscription.userId, subscription.groupKey, new Date())
+
+          // Notificar usuário e proprietário
+          await notifyUserSubscriptionExpired(subscription.userId, subscription.groupKey)
+          await notifyOwnerUserRemoved(subscription.userId, subscription.groupKey)
+
+          // Registrar log
+          await TransactionLog.create({
+            userId: subscription.userId,
+            action: "subscription_expired_and_removed",
+            details: {
+              groupKey: subscription.groupKey,
+              planKey: subscription.planKey,
+              expiresAt: subscription.expiresAt,
+            },
+          })
+
+          console.log(`✅ Usuário ${subscription.userId} removido por expiração de assinatura`)
+        }
+      } catch (error) {
+        console.error(`❌ Erro ao remover usuário ${subscription.userId}:`, error.message)
       }
-    } catch (error) {
-      console.error(`❌ Erro ao remover usuário ${userId}:`, error.message)
     }
+
+    // Atualizar planilha de monitoramento
+    if (expiredSubscriptions.length > 0) {
+      await updateMonitoringSheet()
+    }
+  } catch (error) {
+    console.error("❌ Erro ao verificar assinaturas expiradas:", error.message)
   }
 }
 
@@ -104,11 +289,11 @@ async function removeUserFromGroup(groupId, userId) {
     const response = await axios.post(`${TELEGRAM_API}/kickChatMember`, {
       chat_id: groupId,
       user_id: userId,
-      revoke_messages: false, // Manter as mensagens do usuário
+      revoke_messages: false,
     })
     return response.data.ok
   } catch (error) {
-    console.error(`Erro ao remover usuário ${userId} do grupo ${groupId}:`, error.message)
+    console.error(`Erro ao remover usuário ${userId}:`, error.message)
     return false
   }
 }
@@ -151,18 +336,15 @@ async function notifyOwnerUserRemoved(userId, groupKey) {
 
 /**
  * Inicia o monitoramento periódico de assinaturas
- * Verifica a cada 5 minutos (300000 ms)
  */
 function startSubscriptionMonitoring() {
   console.log("🔍 Monitoramento de assinaturas iniciado (verificação a cada 5 minutos)")
   
-  // Verificar imediatamente ao iniciar
   checkAndRemoveExpiredSubscriptions()
   
-  // Configurar intervalo para verificar periodicamente
   setInterval(() => {
     checkAndRemoveExpiredSubscriptions()
-  }, 1 * 60 * 1000) // 1 minuto
+  }, 5 * 60 * 1000)
 }
 
 // ─── Webhook do Telegram ──────────────────────────────────────────────────────
@@ -228,23 +410,34 @@ app.post("/telegram", async (req, res) => {
       })
     }
 
-    // ─── Processar compra (escolher método de pagamento) ─────────────────────
+    // ─── Processar compra ─────────────────────────────────────────────────────
     if (callback && callback.data.startsWith("buy_")) {
       const [, groupKey, planKey] = callback.data.split("_")
       const config = plansConfig[groupKey]
       const plan = config.plans[planKey]
 
-      // Armazenar pagamento pendente
-      pendingPayments.set(chatId, {
-        groupKey,
-        planKey,
-        amount: plan.price,
-        timestamp: Date.now(),
-        userName,
+      // Armazenar pagamento pendente no banco de dados
+      await PendingPayment.findByIdAndUpdate(
+        chatId,
+        {
+          chatId,
+          userId,
+          userName,
+          groupKey,
+          planKey,
+          amount: plan.price,
+          timestamp: new Date(),
+        },
+        { upsert: true }
+      )
+
+      // Registrar log
+      await TransactionLog.create({
         userId,
+        action: "plan_selected",
+        details: { groupKey, planKey, amount: plan.price },
       })
 
-      // Perguntar método de pagamento
       const paymentMethodText = groupKey === "br"
         ? `${config.welcome_message}\n\n💰 Plano: *${plan.label}*\n💵 Valor: *${plan.price_display}*\n\nEscolha como deseja pagar:`
         : `${config.welcome_message}\n\n💰 Plan: *${plan.label}*\n💵 Amount: *${plan.price_display}*\n\nChoose how you want to pay:`
@@ -268,7 +461,7 @@ app.post("/telegram", async (req, res) => {
       const config = plansConfig[groupKey]
       const plan = config.plans[planKey]
 
-      const payment = pendingPayments.get(chatId)
+      const payment = await PendingPayment.findById(chatId)
       if (!payment) {
         const expiredMsg = groupKey === "br"
           ? "❌ Sessão expirada. Use /start para começar novamente."
@@ -279,15 +472,12 @@ app.post("/telegram", async (req, res) => {
         })
       }
 
-      // Atualizar método de pagamento
       payment.paymentMethod = "crypto"
-      payment.amount_usd = plan.price_usd
-      pendingPayments.set(chatId, payment)
+      await payment.save()
 
-      // Enviar endereço da Trust Wallet
       const cryptoMessage = groupKey === "br"
-        ? `💎 *Pagamento em Cripto*\n\n📍 Rede: *TRON (TRX)*\n💰 Moeda: *USDT*\n💵 Valor: *${plan.price_usd} USDT*\n\n📋 *Endereço da Carteira:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *Após enviar a criptomoeda, envie o comprovante aqui* (screenshot do hash da transação)\n\n⏰ Confirmações: Diariamente 09:00 - 22:00 (Horário de Brasília)`
-        : `💎 *Crypto Payment*\n\n📍 Network: *TRON (TRX)*\n💰 Currency: *USDT*\n💵 Amount: *${plan.price_usd} USDT*\n\n📋 *Wallet Address:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *After sending the cryptocurrency, send the receipt here* (screenshot of transaction hash)\n\n⏰ Confirmations: Daily 09:00 - 22:00 (Brasília Time)`
+        ? `💎 *Pagamento em Cripto*\n\n📍 Rede: *TRON (TRX)*\n💰 Moeda: *USDT*\n💵 Valor: *${plan.price_usd} USDT*\n\n📋 *Endereço da Carteira:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *Após enviar a criptomoeda, envie o comprovante aqui*`
+        : `💎 *Crypto Payment*\n\n📍 Network: *TRON (TRX)*\n💰 Currency: *USDT*\n💵 Amount: *${plan.price_usd} USDT*\n\n📋 *Wallet Address:*\n\`${TRUST_WALLET_ADDRESS}\`\n\n⏱️ *After sending the cryptocurrency, send the receipt here*`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -295,10 +485,9 @@ app.post("/telegram", async (req, res) => {
         parse_mode: "Markdown",
       })
 
-      // Notificar o proprietário
       const notifyMsg = groupKey === "br"
-        ? `🔔 Novo pagamento pendente (CRIPTO)!\n\n💰 Valor: ${plan.price_usd} USDT\n📦 Plano: ${plan.label}\n🏠 Grupo: ${groupKey.toUpperCase()}\n\nAguardando comprovante...`
-        : `🔔 New pending payment (CRYPTO)!\n\n💰 Amount: ${plan.price_usd} USDT\n📦 Plan: ${plan.label}\n🏠 Group: ${groupKey.toUpperCase()}\n\nAwaiting receipt...`
+        ? `🔔 Novo pagamento pendente (CRIPTO)!\n\n💰 Valor: ${plan.price_usd} USDT\n📦 Plano: ${plan.label}\n🏠 Grupo: ${groupKey.toUpperCase()}`
+        : `🔔 New pending payment (CRYPTO)!\n\n💰 Amount: ${plan.price_usd} USDT\n📦 Plan: ${plan.label}\n🏠 Group: ${groupKey.toUpperCase()}`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: OWNER_TELEGRAM_ID,
@@ -312,7 +501,7 @@ app.post("/telegram", async (req, res) => {
       const config = plansConfig[groupKey]
       const plan = config.plans[planKey]
 
-      const payment = pendingPayments.get(chatId)
+      const payment = await PendingPayment.findById(chatId)
       if (!payment) {
         const expiredMsg = groupKey === "br"
           ? "❌ Sessão expirada. Use /start para começar novamente."
@@ -323,11 +512,9 @@ app.post("/telegram", async (req, res) => {
         })
       }
 
-      // Atualizar método de pagamento
       payment.paymentMethod = "livepix"
-      pendingPayments.set(chatId, payment)
+      await payment.save()
 
-      // Enviar link do LivePix
       const livepixMessage = groupKey === "br"
         ? `💳 *Pagamento via LivePix*\n\n💵 Valor: *${plan.price_display}*\n\n👇 Clique no botão abaixo para pagar:`
         : `💳 *Payment via LivePix*\n\n💵 Amount: *${plan.price_display}*\n\n👇 Click the button below to pay:`
@@ -344,8 +531,8 @@ app.post("/telegram", async (req, res) => {
       })
 
       const confirmMessage = groupKey === "br"
-        ? `⏱️ *Após fazer o pagamento, envie o comprovante aqui* (screenshot ou foto)\n\n⏰ Confirmações: Diariamente 09:00 - 22:00 (Horário de Brasília)`
-        : `⏱️ *After making the payment, send the receipt here* (screenshot or photo)\n\n⏰ Confirmations: Daily 09:00 - 22:00 (Brasília Time)`
+        ? `⏱️ *Após fazer o pagamento, envie o comprovante aqui*`
+        : `⏱️ *After making the payment, send the receipt here*`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -353,10 +540,9 @@ app.post("/telegram", async (req, res) => {
         parse_mode: "Markdown",
       })
 
-      // Notificar o proprietário
       const notifyMsg = groupKey === "br"
-        ? `🔔 Novo pagamento pendente (LIVEPIX)!\n\n💰 Valor: ${plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${groupKey.toUpperCase()}\n\nAguardando comprovante...`
-        : `🔔 New pending payment (LIVEPIX)!\n\n💰 Amount: ${plan.price_display}\n📦 Plan: ${plan.label}\n🏠 Group: ${groupKey.toUpperCase()}\n\nAwaiting receipt...`
+        ? `🔔 Novo pagamento pendente (LIVEPIX)!\n\n💰 Valor: ${plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${groupKey.toUpperCase()}`
+        : `🔔 New pending payment (LIVEPIX)!\n\n💰 Amount: ${plan.price_display}\n📦 Plan: ${plan.label}\n🏠 Group: ${groupKey.toUpperCase()}`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: OWNER_TELEGRAM_ID,
@@ -366,43 +552,36 @@ app.post("/telegram", async (req, res) => {
 
     // ─── Receber comprovante ──────────────────────────────────────────────────
     if (message?.photo || message?.document) {
-      const payment = pendingPayments.get(chatId)
+      const payment = await PendingPayment.findById(chatId)
 
       if (!payment) {
-        const noPaymentMsg = payment?.groupKey === "int"
-          ? "❌ No pending payment found. Use /start to begin."
-          : "❌ Nenhum pagamento pendente encontrado. Use /start para começar."
+        const noPaymentMsg = "❌ Nenhum pagamento pendente encontrado. Use /start para começar."
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
           text: noPaymentMsg,
         })
       }
 
-      // Extrair informações do arquivo
-      let fileId, fileName
+      let fileId
       if (message.photo) {
         fileId = message.photo[message.photo.length - 1].file_id
-        fileName = `comprovante_${chatId}_${Date.now()}.jpg`
       } else if (message.document) {
         fileId = message.document.file_id
-        fileName = message.document.file_name || `comprovante_${chatId}_${Date.now()}`
       }
 
-      // Notificar o proprietário com o comprovante
       const groupConfig = plansConfig[payment.groupKey]
       const plan = groupConfig.plans[payment.planKey]
       const paymentMethodText = payment.paymentMethod === "crypto" ? "💎 CRYPTO" : "💳 LIVEPIX"
 
       const notifyMsg = payment.groupKey === "br"
-        ? `✅ Comprovante recebido!\n\n💰 Valor: ${payment.paymentMethod === "crypto" ? plan.price_usd + " USDT" : plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n💳 Método: ${paymentMethodText}\n\n👇 Comprovante abaixo:`
-        : `✅ Receipt received!\n\n💰 Amount: ${payment.paymentMethod === "crypto" ? plan.price_usd + " USDT" : plan.price_display}\n📦 Plan: ${plan.label}\n🏠 Group: ${payment.groupKey.toUpperCase()}\n💳 Method: ${paymentMethodText}\n\n👇 Receipt below:`
+        ? `✅ Comprovante recebido!\n\n💰 Valor: ${payment.paymentMethod === "crypto" ? plan.price_usd + " USDT" : plan.price_display}\n📦 Plano: ${plan.label}\n🏠 Grupo: ${payment.groupKey.toUpperCase()}\n💳 Método: ${paymentMethodText}`
+        : `✅ Receipt received!\n\n💰 Amount: ${payment.paymentMethod === "crypto" ? plan.price_usd + " USDT" : plan.price_display}\n📦 Plan: ${plan.label}\n🏠 Group: ${payment.groupKey.toUpperCase()}\n💳 Method: ${paymentMethodText}`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: OWNER_TELEGRAM_ID,
         text: notifyMsg,
       })
 
-      // Enviar o comprovante para o proprietário
       if (message.photo) {
         await axios.post(`${TELEGRAM_API}/sendPhoto`, {
           chat_id: OWNER_TELEGRAM_ID,
@@ -417,10 +596,9 @@ app.post("/telegram", async (req, res) => {
         })
       }
 
-      // Informar ao cliente que o comprovante foi recebido
       const receiptMsg = payment.groupKey === "br"
-        ? "✅ Comprovante recebido!\n\nEstou verificando o pagamento. Você receberá o link de acesso durante o horário de confirmação (09:00 - 22:00)."
-        : "✅ Receipt received!\n\nI'm verifying the payment. You will receive the access link during confirmation hours (09:00 - 22:00)."
+        ? "✅ Comprovante recebido!\n\nEstou verificando o pagamento. Você receberá o link de acesso durante o horário de confirmação."
+        : "✅ Receipt received!\n\nI'm verifying the payment. You will receive the access link during confirmation hours."
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -438,7 +616,7 @@ app.post("/telegram", async (req, res) => {
       }
 
       const parts = message.text.split(" ")
-      const clientChatId = parts[1]
+      const clientChatId = parseInt(parts[1])
 
       if (!clientChatId) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -447,7 +625,7 @@ app.post("/telegram", async (req, res) => {
         })
       }
 
-      const payment = pendingPayments.get(parseInt(clientChatId))
+      const payment = await PendingPayment.findById(clientChatId)
       if (!payment) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
@@ -458,7 +636,6 @@ app.post("/telegram", async (req, res) => {
       const groupConfig = plansConfig[payment.groupKey]
       const plan = groupConfig.plans[payment.planKey]
 
-      // Gerar link de acesso único
       const inviteLink = await generateOneTimeInviteLink(groupConfig.group_id)
       if (!inviteLink) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -467,26 +644,47 @@ app.post("/telegram", async (req, res) => {
         })
       }
 
-      // Armazenar assinatura com data de expiração
-      const expiresAt = Date.now() + plan.days * 24 * 60 * 60 * 1000
-      userSubscriptions.set(parseInt(clientChatId), {
-        groupKey: payment.groupKey,
-        expiresAt,
-        planKey: payment.planKey,
-        userName: payment.userName,
-        activatedAt: Date.now(),
+      // Criar assinatura no banco de dados
+      const expiresAt = new Date(Date.now() + plan.days * 24 * 60 * 60 * 1000)
+      
+      await Subscription.findByIdAndUpdate(
+        payment.userId,
+        {
+          userId: payment.userId,
+          chatId: clientChatId,
+          userName: payment.userName,
+          groupKey: payment.groupKey,
+          planKey: payment.planKey,
+          activatedAt: new Date(),
+          expiresAt,
+          status: "active",
+          paymentMethod: payment.paymentMethod,
+          renewalCount: 0,
+        },
+        { upsert: true }
+      )
+
+      // Remover do histórico de removidos se estava lá
+      await RemovedUser.deleteOne({ userId: payment.userId })
+
+      // Registrar log
+      await TransactionLog.create({
+        userId: payment.userId,
+        action: "subscription_activated",
+        details: {
+          groupKey: payment.groupKey,
+          planKey: payment.planKey,
+          expiresAt,
+          paymentMethod: payment.paymentMethod,
+        },
       })
 
-      // Remover do mapa de usuários removidos se estava lá
-      removedUsers.delete(parseInt(clientChatId))
-
-      // Enviar link para o cliente
       const approvalMsg = payment.groupKey === "br"
-        ? `✅ *Pagamento aprovado!*\n\n💎 Sua assinatura foi ativada.\n📅 Válida por ${plan.days} dias.\n⏰ Acesso confirmado em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}\n\nClique no botão abaixo para entrar no grupo VIP. O link é de uso único:`
-        : `✅ *Payment approved!*\n\n💎 Your subscription has been activated.\n📅 Valid for ${plan.days} days.\n⏰ Access confirmed on ${new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}\n\nClick the button below to enter the VIP group. The link is single-use:`
+        ? `✅ *Pagamento aprovado!*\n\n💎 Sua assinatura foi ativada.\n📅 Válida por ${plan.days} dias.\n⏰ Acesso confirmado em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}\n\nClique no botão abaixo para entrar no grupo VIP:`
+        : `✅ *Payment approved!*\n\n💎 Your subscription has been activated.\n📅 Valid for ${plan.days} days.\n⏰ Access confirmed on ${new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}\n\nClick the button below to enter the VIP group:`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: parseInt(clientChatId),
+        chat_id: clientChatId,
         text: approvalMsg,
         parse_mode: "Markdown",
         reply_markup: {
@@ -496,17 +694,19 @@ app.post("/telegram", async (req, res) => {
         },
       })
 
-      // Confirmar para o proprietário
       const confirmMsg = payment.groupKey === "br"
-        ? `✅ Acesso liberado para @${payment.userName}!\n\n⏰ Assinatura válida até: ${new Date(expiresAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`
-        : `✅ Access released for @${payment.userName}!\n\n⏰ Subscription valid until: ${new Date(expiresAt).toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}`
+        ? `✅ Acesso liberado para @${payment.userName}!\n\n⏰ Assinatura válida até: ${expiresAt.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`
+        : `✅ Access released for @${payment.userName}!\n\n⏰ Subscription valid until: ${expiresAt.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
         text: confirmMsg,
       })
 
-      pendingPayments.delete(parseInt(clientChatId))
+      await PendingPayment.deleteOne({ _id: clientChatId })
+
+      // Atualizar planilha
+      await updateMonitoringSheet()
     }
 
     // ─── Comando /rejeitar ────────────────────────────────────────────────────
@@ -519,7 +719,7 @@ app.post("/telegram", async (req, res) => {
       }
 
       const parts = message.text.split(" ")
-      const clientChatId = parts[1]
+      const clientChatId = parseInt(parts[1])
       const reason = parts.slice(2).join(" ") || (message.text.startsWith("/rejeitar") ? "Comprovante inválido" : "Invalid receipt")
 
       if (!clientChatId) {
@@ -529,7 +729,7 @@ app.post("/telegram", async (req, res) => {
         })
       }
 
-      const payment = pendingPayments.get(parseInt(clientChatId))
+      const payment = await PendingPayment.findById(clientChatId)
       if (!payment) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
@@ -537,17 +737,15 @@ app.post("/telegram", async (req, res) => {
         })
       }
 
-      // Informar ao cliente
       const rejectMsg = payment.groupKey === "br"
         ? `❌ Seu pagamento foi rejeitado.\n\n📝 Motivo: ${reason}\n\nTente novamente com /start`
         : `❌ Your payment has been rejected.\n\n📝 Reason: ${reason}\n\nTry again with /start`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: parseInt(clientChatId),
+        chat_id: clientChatId,
         text: rejectMsg,
       })
 
-      // Confirmar para o proprietário
       const confirmMsg = payment.groupKey === "br"
         ? `✅ Pagamento rejeitado para @${payment.userName}.`
         : `✅ Payment rejected for @${payment.userName}.`
@@ -557,17 +755,22 @@ app.post("/telegram", async (req, res) => {
         text: confirmMsg,
       })
 
-      pendingPayments.delete(parseInt(clientChatId))
+      // Registrar log
+      await TransactionLog.create({
+        userId: payment.userId,
+        action: "payment_rejected",
+        details: { reason },
+      })
+
+      await PendingPayment.deleteOne({ _id: clientChatId })
     }
 
-    // ─── Comando /status (verificar status da assinatura) ──────────────────────
+    // ─── Comando /status ──────────────────────────────────────────────────────
     if (message?.text === "/status") {
-      const subscription = userSubscriptions.get(userId)
+      const subscription = await Subscription.findById(userId)
       
-      if (!subscription) {
-        const noSubMsg = message.text.startsWith("/status") && userId.toString() !== OWNER_TELEGRAM_ID
-          ? "❌ Você não possui uma assinatura ativa. Use /start para adquirir uma."
-          : "❌ No active subscription found. Use /start to get one."
+      if (!subscription || subscription.status !== "active") {
+        const noSubMsg = "❌ Você não possui uma assinatura ativa. Use /start para adquirir uma."
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
           text: noSubMsg,
@@ -588,7 +791,7 @@ app.post("/telegram", async (req, res) => {
       })
     }
 
-    // ─── Comando /listar_assinaturas (apenas para proprietário) ────────────────
+    // ─── Comando /listar_assinaturas ──────────────────────────────────────────
     if (message?.text === "/listar_assinaturas" || message?.text === "/list_subscriptions") {
       if (userId.toString() !== OWNER_TELEGRAM_ID) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -597,7 +800,9 @@ app.post("/telegram", async (req, res) => {
         })
       }
 
-      if (userSubscriptions.size === 0) {
+      const subscriptions = await Subscription.find({ status: "active" }).sort({ expiresAt: 1 })
+
+      if (subscriptions.length === 0) {
         return await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: chatId,
           text: "📭 Nenhuma assinatura ativa no momento.",
@@ -607,9 +812,9 @@ app.post("/telegram", async (req, res) => {
       let listMsg = "📋 *Assinaturas Ativas*\n\n"
       const now = Date.now()
 
-      for (const [userId, subscription] of userSubscriptions.entries()) {
-        const daysRemaining = Math.ceil((subscription.expiresAt - now) / (24 * 60 * 60 * 1000))
-        listMsg += `👤 ID: ${userId}\n🏠 Grupo: ${subscription.groupKey.toUpperCase()}\n📅 Dias: ${daysRemaining}\n\n`
+      for (const sub of subscriptions) {
+        const daysRemaining = Math.ceil((sub.expiresAt - now) / (24 * 60 * 60 * 1000))
+        listMsg += `👤 ID: ${sub.userId}\n🏠 Grupo: ${sub.groupKey.toUpperCase()}\n📅 Dias: ${daysRemaining}\n\n`
       }
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -645,27 +850,51 @@ async function generateOneTimeInviteLink(groupId) {
 }
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
-app.get("/health", (req, res) => {
+app.get("/health", async (req, res) => {
+  const subscriptionsCount = await Subscription.countDocuments({ status: "active" })
+  
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
     telegram_configured: !!BOT_TOKEN,
     payments_configured: !!(TRUST_WALLET_ADDRESS && LIVEPIX_URL),
-    active_subscriptions: userSubscriptions.size,
+    database_connected: mongoose.connection.readyState === 1,
+    active_subscriptions: subscriptionsCount,
     monitoring_enabled: true,
+    google_sheets_enabled: !!sheetsClient,
   })
 })
 
 // ─── Iniciar servidor ─────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`🚀 Bot Telegram VIP (Cripto + LivePix) rodando na porta ${PORT}`)
-  console.log(`📍 Webhook URL: ${WEBHOOK_BASE_URL}/telegram`)
-  console.log(`✅ Telegram configurado: ${!!BOT_TOKEN}`)
-  console.log(`✅ Cripto configurado: ${!!TRUST_WALLET_ADDRESS}`)
-  console.log(`✅ LivePix configurado: ${!!LIVEPIX_URL}`)
-  
-  // Iniciar monitoramento de assinaturas
-  startSubscriptionMonitoring()
-})
+async function startServer() {
+  try {
+    // Conectar ao MongoDB
+    await mongoose.connect(MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    })
+    console.log("✅ MongoDB conectado com sucesso")
 
+    // Inicializar Google Sheets
+    await initializeGoogleSheets()
 
+    // Iniciar servidor Express
+    app.listen(PORT, () => {
+      console.log(`🚀 Bot Telegram VIP rodando na porta ${PORT}`)
+      console.log(`📍 Webhook URL: ${WEBHOOK_BASE_URL}/telegram`)
+      console.log(`✅ Telegram configurado: ${!!BOT_TOKEN}`)
+      console.log(`✅ Cripto configurado: ${!!TRUST_WALLET_ADDRESS}`)
+      console.log(`✅ LivePix configurado: ${!!LIVEPIX_URL}`)
+      console.log(`✅ MongoDB conectado: ${MONGODB_URI}`)
+      console.log(`✅ Google Sheets ID: ${GOOGLE_SHEETS_ID}`)
+      
+      // Iniciar monitoramento de assinaturas
+      startSubscriptionMonitoring()
+    })
+  } catch (error) {
+    console.error("❌ Erro ao iniciar servidor:", error.message)
+    process.exit(1)
+  }
+}
+
+startServer()
