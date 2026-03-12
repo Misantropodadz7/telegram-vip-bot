@@ -47,9 +47,123 @@ const plansConfig = {
 // ─── Armazenamento em memória ──────────────────────────────────────────────────
 const pendingPayments = new Map()
 const userSubscriptions = new Map()
+const removedUsers = new Map() // Rastrear usuários removidos para evitar duplicatas
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(bodyParser.json())
+
+// ─── Verificar e remover assinaturas expiradas ────────────────────────────────
+/**
+ * Verifica todas as assinaturas e remove usuários cujas assinaturas expiraram
+ */
+async function checkAndRemoveExpiredSubscriptions() {
+  const now = Date.now()
+  const usersToRemove = []
+
+  // Encontrar todas as assinaturas expiradas
+  for (const [userId, subscription] of userSubscriptions.entries()) {
+    if (subscription.expiresAt <= now && !removedUsers.has(userId)) {
+      usersToRemove.push({ userId, subscription })
+    }
+  }
+
+  // Remover usuários expirados
+  for (const { userId, subscription } of usersToRemove) {
+    try {
+      const groupId = plansConfig[subscription.groupKey].group_id
+      
+      // Tentar remover o usuário do grupo
+      const removed = await removeUserFromGroup(groupId, userId)
+      
+      if (removed) {
+        removedUsers.set(userId, {
+          removedAt: now,
+          groupKey: subscription.groupKey,
+        })
+        userSubscriptions.delete(userId)
+
+        // Notificar o usuário
+        await notifyUserSubscriptionExpired(userId, subscription.groupKey)
+
+        // Notificar o proprietário
+        await notifyOwnerUserRemoved(userId, subscription.groupKey)
+
+        console.log(`✅ Usuário ${userId} removido do grupo ${subscription.groupKey} por expiração de assinatura`)
+      }
+    } catch (error) {
+      console.error(`❌ Erro ao remover usuário ${userId}:`, error.message)
+    }
+  }
+}
+
+/**
+ * Remove um usuário de um grupo Telegram
+ */
+async function removeUserFromGroup(groupId, userId) {
+  try {
+    const response = await axios.post(`${TELEGRAM_API}/kickChatMember`, {
+      chat_id: groupId,
+      user_id: userId,
+      revoke_messages: false, // Manter as mensagens do usuário
+    })
+    return response.data.ok
+  } catch (error) {
+    console.error(`Erro ao remover usuário ${userId} do grupo ${groupId}:`, error.message)
+    return false
+  }
+}
+
+/**
+ * Notifica o usuário que sua assinatura expirou
+ */
+async function notifyUserSubscriptionExpired(userId, groupKey) {
+  try {
+    const message = groupKey === "br"
+      ? `⏰ *Sua assinatura VIP expirou!*\n\n😢 Infelizmente, sua assinatura chegou ao fim e você foi removido do grupo VIP.\n\n💡 Para continuar com acesso, use /start para renovar sua assinatura.`
+      : `⏰ *Your VIP subscription has expired!*\n\n😢 Unfortunately, your subscription has ended and you have been removed from the VIP group.\n\n💡 To continue with access, use /start to renew your subscription.`
+
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: userId,
+      text: message,
+      parse_mode: "Markdown",
+    })
+  } catch (error) {
+    console.error(`Erro ao notificar usuário ${userId}:`, error.message)
+  }
+}
+
+/**
+ * Notifica o proprietário sobre a remoção de um usuário
+ */
+async function notifyOwnerUserRemoved(userId, groupKey) {
+  try {
+    const message = `🔔 *Usuário removido por expiração*\n\n👤 ID: ${userId}\n🏠 Grupo: ${groupKey.toUpperCase()}\n⏰ Removido em: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`
+
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: OWNER_TELEGRAM_ID,
+      text: message,
+      parse_mode: "Markdown",
+    })
+  } catch (error) {
+    console.error(`Erro ao notificar proprietário:`, error.message)
+  }
+}
+
+/**
+ * Inicia o monitoramento periódico de assinaturas
+ * Verifica a cada 5 minutos (300000 ms)
+ */
+function startSubscriptionMonitoring() {
+  console.log("🔍 Monitoramento de assinaturas iniciado (verificação a cada 5 minutos)")
+  
+  // Verificar imediatamente ao iniciar
+  checkAndRemoveExpiredSubscriptions()
+  
+  // Configurar intervalo para verificar periodicamente
+  setInterval(() => {
+    checkAndRemoveExpiredSubscriptions()
+  }, 5 * 60 * 1000) // 5 minutos
+}
 
 // ─── Webhook do Telegram ──────────────────────────────────────────────────────
 app.post("/telegram", async (req, res) => {
@@ -353,12 +467,18 @@ app.post("/telegram", async (req, res) => {
         })
       }
 
-      // Armazenar assinatura
+      // Armazenar assinatura com data de expiração
       const expiresAt = Date.now() + plan.days * 24 * 60 * 60 * 1000
       userSubscriptions.set(parseInt(clientChatId), {
         groupKey: payment.groupKey,
         expiresAt,
+        planKey: payment.planKey,
+        userName: payment.userName,
+        activatedAt: Date.now(),
       })
+
+      // Remover do mapa de usuários removidos se estava lá
+      removedUsers.delete(parseInt(clientChatId))
 
       // Enviar link para o cliente
       const approvalMsg = payment.groupKey === "br"
@@ -378,8 +498,8 @@ app.post("/telegram", async (req, res) => {
 
       // Confirmar para o proprietário
       const confirmMsg = payment.groupKey === "br"
-        ? `✅ Acesso liberado para @${payment.userName}!`
-        : `✅ Access released for @${payment.userName}!`
+        ? `✅ Acesso liberado para @${payment.userName}!\n\n⏰ Assinatura válida até: ${new Date(expiresAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`
+        : `✅ Access released for @${payment.userName}!\n\n⏰ Subscription valid until: ${new Date(expiresAt).toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}`
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
@@ -440,6 +560,65 @@ app.post("/telegram", async (req, res) => {
       pendingPayments.delete(parseInt(clientChatId))
     }
 
+    // ─── Comando /status (verificar status da assinatura) ──────────────────────
+    if (message?.text === "/status") {
+      const subscription = userSubscriptions.get(userId)
+      
+      if (!subscription) {
+        const noSubMsg = message.text.startsWith("/status") && userId.toString() !== OWNER_TELEGRAM_ID
+          ? "❌ Você não possui uma assinatura ativa. Use /start para adquirir uma."
+          : "❌ No active subscription found. Use /start to get one."
+        return await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: noSubMsg,
+        })
+      }
+
+      const now = Date.now()
+      const timeRemaining = subscription.expiresAt - now
+      const daysRemaining = Math.ceil(timeRemaining / (24 * 60 * 60 * 1000))
+      const expiresAtDate = new Date(subscription.expiresAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+
+      const statusMsg = `✅ *Sua Assinatura VIP*\n\n🏠 Grupo: ${subscription.groupKey.toUpperCase()}\n📅 Dias restantes: ${daysRemaining}\n⏰ Expira em: ${expiresAtDate}`
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: statusMsg,
+        parse_mode: "Markdown",
+      })
+    }
+
+    // ─── Comando /listar_assinaturas (apenas para proprietário) ────────────────
+    if (message?.text === "/listar_assinaturas" || message?.text === "/list_subscriptions") {
+      if (userId.toString() !== OWNER_TELEGRAM_ID) {
+        return await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: "❌ You don't have permission to use this command.",
+        })
+      }
+
+      if (userSubscriptions.size === 0) {
+        return await axios.post(`${TELEGRAM_API}/sendMessage`, {
+          chat_id: chatId,
+          text: "📭 Nenhuma assinatura ativa no momento.",
+        })
+      }
+
+      let listMsg = "📋 *Assinaturas Ativas*\n\n"
+      const now = Date.now()
+
+      for (const [userId, subscription] of userSubscriptions.entries()) {
+        const daysRemaining = Math.ceil((subscription.expiresAt - now) / (24 * 60 * 60 * 1000))
+        listMsg += `👤 ID: ${userId}\n🏠 Grupo: ${subscription.groupKey.toUpperCase()}\n📅 Dias: ${daysRemaining}\n\n`
+      }
+
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: listMsg,
+        parse_mode: "Markdown",
+      })
+    }
+
     res.sendStatus(200)
   } catch (error) {
     console.error("Erro Telegram:", error.message)
@@ -472,6 +651,8 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     telegram_configured: !!BOT_TOKEN,
     payments_configured: !!(TRUST_WALLET_ADDRESS && LIVEPIX_URL),
+    active_subscriptions: userSubscriptions.size,
+    monitoring_enabled: true,
   })
 })
 
@@ -482,7 +663,8 @@ app.listen(PORT, () => {
   console.log(`✅ Telegram configurado: ${!!BOT_TOKEN}`)
   console.log(`✅ Cripto configurado: ${!!TRUST_WALLET_ADDRESS}`)
   console.log(`✅ LivePix configurado: ${!!LIVEPIX_URL}`)
+  
+  // Iniciar monitoramento de assinaturas
+  startSubscriptionMonitoring()
 })
-
-
 
