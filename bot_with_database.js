@@ -16,9 +16,9 @@ const TRUST_WALLET_ADDRESS = process.env.TRUST_WALLET_ADDRESS?.trim() || ""
 const LIVEPIX_URL = process.env.LIVEPIX_URL?.trim() || ""
 const OWNER_TELEGRAM_ID = process.env.OWNER_TELEGRAM_ID?.trim() || ""
 
-// GRUPOS
-const VIP_BR_GROUP_ID = process.env.VIP_BR_GROUP_ID?.trim() || ""
-const VIP_INT_GROUP_ID = process.env.VIP_INT_GROUP_ID?.trim() || ""
+// GRUPOS (Ajustado para os nomes no seu Railway)
+const VIP_BR_GROUP_ID = process.env.GROUP_ID_BR?.trim() || ""
+const VIP_INT_GROUP_ID = process.env.GROUP_ID_INT?.trim() || ""
 
 // OUTROS
 const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL?.trim() || ""
@@ -51,6 +51,30 @@ async function initializeGoogleSheets() {
     console.log("Google Sheets conectado")
   } catch (err) {
     console.log("Erro Google Sheets:", err.message)
+  }
+}
+
+// Função para salvar na planilha
+async function saveToSheets(data) {
+  if (!sheetsClient || !GOOGLE_SHEETS_ID) return;
+  try {
+    await sheetsClient.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEETS_ID,
+      range: "Página1!A:E", 
+      valueInputOption: "USER_ENTERED",
+      resource: {
+        values: [[
+          new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+          data.userId,
+          data.userName,
+          data.groupKey,
+          data.planKey
+        ]]
+      }
+    });
+    console.log("Dados salvos na planilha");
+  } catch (err) {
+    console.log("Erro ao salvar na planilha:", err.message);
   }
 }
 
@@ -231,6 +255,9 @@ app.post("/telegram", async (req, res) => {
         }
       })
 
+      // Salvar na planilha ao aprovar
+      await saveToSheets(payment);
+
       await PendingPayment.deleteOne({ _id: clientId })
     }
 
@@ -273,8 +300,8 @@ async function start() {
       process.exit(1)
     }
 
-    if (!MONGODB_URI) {
-      console.error("MONGODB_URI não configurado")
+    if (!MONGODB_URI || MONGODB_URI.trim() === "") {
+      console.error("MONGODB_URI está vazia ou não configurada nas variáveis do Railway")
       process.exit(1)
     }
 
@@ -297,8 +324,6 @@ async function start() {
 }
 
 start()
-
-
 
 
 
