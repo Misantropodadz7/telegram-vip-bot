@@ -346,8 +346,18 @@ async function start() {
     await initializeGoogleSheets()
 
     if (WEBHOOK_BASE_URL) {
-      await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_BASE_URL}/telegram`)
-      console.log("Webhook configurado")
+      console.log(`Configurando Webhook para: ${WEBHOOK_BASE_URL}/telegram`);
+      try {
+        const response = await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_BASE_URL}/telegram`);
+        console.log("Resposta do Telegram ao configurar Webhook:", response.data);
+        if (response.data.ok) {
+          console.log("Webhook configurado com sucesso!");
+        } else {
+          console.log("Erro ao configurar Webhook:", response.data.description);
+        }
+      } catch (webhookErr) {
+        console.error("Erro ao chamar API do Telegram para Webhook:", webhookErr.message);
+      }
     }
 
     app.listen(PORT, () => {
@@ -361,4 +371,3 @@ async function start() {
 }
 
 start()
-
