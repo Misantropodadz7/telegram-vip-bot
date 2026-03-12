@@ -83,7 +83,7 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 4. Clique no Plano (RESPOSTA SIMPLIFICADA)
+    // 4. Clique no Plano (MENSAGEM COM HORÁRIO)
     if (callbackData && callbackData.startsWith("b_")) {
       const parts = callbackData.split("_");
       const groupKey = parts[1];
@@ -93,8 +93,8 @@ app.post("/telegram", async (req, res) => {
 
       console.log(`[COMPRA] Grupo=${groupKey}, Plano=${planKey}`);
 
-      // Resposta sem formatação para garantir o envio
-      await sendMessage(chatId, "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat.");
+      // Resposta com horário de atendimento
+      await sendMessage(chatId, "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat.\n\n🕒 Horario de Atendimento: 09:00 as 22:00 todos os dias.");
 
       // Banco em segundo plano
       if (mongoose.connection.readyState === 1) {
@@ -108,9 +108,9 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 5. Recebimento de Comprovante
+    // 5. Recebimento de Comprovante (MENSAGEM COM HORÁRIO)
     if (message && (message.photo || message.document)) {
-      await sendMessage(chatId, "Comprovante recebido com sucesso! As aprovacoes sao feitas todos os dias das 09:00 as 22:00. Aguarde a liberacao!");
+      await sendMessage(chatId, "Comprovante recebido com sucesso!\n\n🕒 Horario de Atendimento: 09:00 as 22:00 todos os dias.\n\nAguarde um momento, em breve seu acesso sera liberado!");
 
       if (OWNER_TELEGRAM_ID) {
         await sendMessage(OWNER_TELEGRAM_ID, `NOVO COMPROVANTE\nUsuario: @${username}\nID: ${chatId}\nPara aprovar use: /aprovar ${chatId}`);
