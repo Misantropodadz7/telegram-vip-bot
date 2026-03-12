@@ -14,7 +14,7 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 const OWNER_TELEGRAM_ID = process.env.OWNER_TELEGRAM_ID?.trim() || ""
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL?.trim() || ""
 const MONGODB_URI = process.env.MONGODB_URI?.trim() || ""
-const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID?.trim() || ""
+const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL?.trim() || "https://privacy.com.br/profile/manubellucciofc"
 const VIP_BR_GROUP_ID = process.env.GROUP_ID_BR?.trim() || ""
 const VIP_INT_GROUP_ID = process.env.GROUP_ID_INT?.trim() || ""
 
@@ -24,7 +24,7 @@ app.use(bodyParser.urlencoded({ extended: true }))
 
 // ROTA DE TESTE
 app.get("/", (req, res) => {
-  res.send(`<h1>Bot Online e Protegido!</h1><p>Status: Ativo e aguardando Telegram.</p>`)
+  res.send(`<h1>Bot VIP Online!</h1><p>Status: Ativo e aguardando Telegram.</p>`)
 })
 
 // TELEGRAM WEBHOOK
@@ -41,10 +41,11 @@ app.post("/telegram", async (req, res) => {
 
     // Lógica do Comando /start
     if (text.startsWith("/start")) {
-      await sendMessage(chatId, "Escolha seu grupo VIP:", {
+      await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
           [{ text: "VIP BR 🇧🇷", callback_data: "plans_br" }],
-          [{ text: "VIP INT 🌎", callback_data: "plans_int" }]
+          [{ text: "VIP INT 🌎", callback_data: "plans_int" }],
+          [{ text: "Acessar meu Privacy 🔥", url: PRIVACY_PROFILE_URL }]
         ]
       })
     }
@@ -58,8 +59,21 @@ app.post("/telegram", async (req, res) => {
           text: `${plans[key].label} - ${plans[key].price_display}`,
           callback_data: `buy_${groupKey}_${key}`
         }]))
+        // Adiciona botão para voltar ao menu inicial
+        keyboard.push([{ text: "⬅️ Voltar", callback_data: "back_to_start" }])
         await sendMessage(chatId, "Escolha seu plano:", { inline_keyboard: keyboard })
       }
+    }
+
+    // Voltar para o menu inicial
+    if (callbackData === "back_to_start") {
+      await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
+        inline_keyboard: [
+          [{ text: "VIP BR 🇧🇷", callback_data: "plans_br" }],
+          [{ text: "VIP INT 🌎", callback_data: "plans_int" }],
+          [{ text: "Acessar meu Privacy 🔥", url: PRIVACY_PROFILE_URL }]
+        ]
+      })
     }
 
     // Lógica de Compra (Início do Checkout)
@@ -67,7 +81,6 @@ app.post("/telegram", async (req, res) => {
       const [, groupKey, planKey] = callbackData.split("_")
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment")
-        // Registra a intenção de compra (Estado: Aguardando Comprovante)
         await PendingPayment.findByIdAndUpdate(
           chatId,
           { _id: chatId, userId, userName: username, groupKey, planKey, status: "awaiting_receipt" },
@@ -77,17 +90,17 @@ app.post("/telegram", async (req, res) => {
       }
     }
 
-    // RECEBIMENTO E ENCAMINHAMENTO DE COMPROVANTE (Com Proteção contra Spam)
+    // RECEBIMENTO E ENCAMINHAMENTO DE COMPROVANTE (Com Aviso de Horário)
     if (message?.photo || message?.document) {
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment")
         const payment = await PendingPayment.findById(chatId)
 
-        // SÓ ENCAMINHA SE O USUÁRIO ESTIVER AGUARDANDO COMPROVANTE
         if (payment && payment.status === "awaiting_receipt") {
-          console.log(`Comprovante VÁLIDO recebido de ${username}`)
+          console.log(`Comprovante recebido de ${username}`)
           
-          await sendMessage(chatId, "Comprovante recebido! Aguarde a aprovação manual.")
+          // Mensagem de confirmação com aviso de horário
+          await sendMessage(chatId, "✅ Comprovante recebido com sucesso!\n\n🕒 **Horário de Atendimento:**\nAs aprovações são feitas todos os dias das **09:00 às 22:00**.\n\nAguarde um momento, em breve seu acesso será liberado!")
 
           if (OWNER_TELEGRAM_ID) {
             await sendMessage(OWNER_TELEGRAM_ID, `🔔 NOVO COMPROVANTE\nUsuário: @${username}\nID: ${chatId}\nPlano: ${payment.planKey} (${payment.groupKey})\n\nPara aprovar, use:\n\`/aprovar ${chatId}\``)
@@ -98,8 +111,6 @@ app.post("/telegram", async (req, res) => {
               message_id: message.message_id
             }).catch(e => console.error("Erro no forward:", e.message))
           }
-        } else {
-          console.log(`Foto ignorada de ${username} (Não solicitada pelo bot)`)
         }
       }
     }
@@ -136,6 +147,7 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
   if (!plan || !groupId) return await sendMessage(adminChatId, "Erro: Configuração de plano/grupo não encontrada.")
 
   try {
+    // Link de convite de USO ÚNICO e expira em 30 minutos
     const expire = Math.floor(Date.now() / 1000) + (30 * 60)
     const r = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
       chat_id: groupId,
@@ -151,15 +163,15 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
       { upsert: true }
     )
 
-    await sendMessage(clientId, "✅ Pagamento aprovado! Bem-vindo(a)!", { 
+    await sendMessage(clientId, "✅ Pagamento aprovado! Bem-vindo(a) ao grupo VIP!", { 
       inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] 
     })
     await PendingPayment.deleteOne({ _id: clientId })
-    await sendMessage(adminChatId, `✅ Sucesso! @${payment.userName} aprovado.`)
+    await sendMessage(adminChatId, `✅ Sucesso! @${payment.userName} aprovado e link de uso único enviado.`)
 
   } catch (e) {
     console.error("Erro na aprovação:", e.message)
-    await sendMessage(adminChatId, "Erro ao gerar link. Verifique as permissões do bot no grupo.")
+    await sendMessage(adminChatId, "Erro ao gerar link. Verifique se o bot é admin no grupo.")
   }
 }
 
