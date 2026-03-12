@@ -131,14 +131,17 @@ app.post("/telegram", async (req, res) => {
 
   if (!message && !callback) return res.sendStatus(200)
 
+  console.log("Update recebido:", JSON.stringify(req.body, null, 2))
+
   try {
     const chatId = message?.chat?.id || callback?.message?.chat?.id
     const userId = message?.from?.id || callback?.from?.id
     const username = message?.from?.username || callback?.from?.username || "User"
 
     // START
-    if (message?.text === "/start") {
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+    if (message?.text?.startsWith("/start")) {
+      console.log(`Comando /start recebido de ${username} (ID: ${userId}) no chat ${chatId}`)
+      const response = await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
         text: "Escolha seu grupo VIP",
         reply_markup: {
@@ -148,6 +151,7 @@ app.post("/telegram", async (req, res) => {
           ]
         }
       })
+      console.log("Resposta do Telegram ao /start:", response.data)
     }
 
     // PLANOS
