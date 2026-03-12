@@ -18,13 +18,17 @@ const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL?.trim() || "https://
 const VIP_BR_GROUP_ID = process.env.GROUP_ID_BR?.trim() || "";
 const VIP_INT_GROUP_ID = process.env.GROUP_ID_INT?.trim() || "";
 
+// PAGAMENTO (VARIÁVEIS)
+const LIVEPIX_URL = process.env.LIVEPIX_URL?.trim() || "Chave Pix não configurada";
+const CRIPTO_WALLET = process.env.CRIPTO_WALLET?.trim() || "Carteira Cripto não configurada";
+
 // MIDDLEWARES
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // ROTA DE TESTE
 app.get("/", (req, res) => {
-  res.send(`<h1>Bot VIP Online!</h1><p>Status: Operacional.</p>`);
+  res.send(`<h1>Bot VIP Interativo Online!</h1><p>Status: Operacional e Organizado.</p>`);
 });
 
 // TELEGRAM WEBHOOK
@@ -34,6 +38,7 @@ app.post("/telegram", async (req, res) => {
 
   try {
     const chatId = message?.chat?.id || callback_query?.message?.chat?.id;
+    const messageId = message?.message_id || callback_query?.message?.message_id;
     const userId = message?.from?.id || callback_query?.from?.id;
     const username = message?.from?.username || callback_query?.from?.username || "User";
     const text = message?.text || "";
@@ -43,7 +48,7 @@ app.post("/telegram", async (req, res) => {
       console.log(`>>> RECEBIDO: ${text || callbackData} de @${username} <<<`);
     }
 
-    // 1. Comando /start
+    // 1. Comando /start (Nova Mensagem Limpa)
     if (text && text.startsWith("/start")) {
       await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
@@ -55,25 +60,9 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 2. Escolha de Grupo
-    if (callbackData === "p_br" || callbackData === "p_int") {
-      const groupKey = callbackData.split("_")[1];
-      const config = getPlansConfig();
-      const groupConfig = config[groupKey];
-      
-      const keyboard = Object.keys(groupConfig.plans).map(key => ([{
-        text: `${groupConfig.plans[key].label} - ${groupConfig.plans[key].price_display}`,
-        callback_data: `b_${groupKey}_${key}`
-      }]));
-      keyboard.push([{ text: "⬅️ Voltar", callback_data: "back" }]);
-      
-      await sendMessage(chatId, "Escolha seu plano:", { inline_keyboard: keyboard });
-      return;
-    }
-
-    // 3. Voltar
+    // 2. Voltar para o Início (Edita Mensagem)
     if (callbackData === "back") {
-      await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
+      await editMessage(chatId, messageId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
           [{ text: "VIP BR 🇧🇷", callback_data: "p_br" }],
           [{ text: "VIP INT 🌎", callback_data: "p_int" }],
@@ -83,23 +72,64 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 4. Clique no Plano (MENSAGEM COM HORÁRIO)
-    if (callbackData && callbackData.startsWith("b_")) {
+    // 3. Escolha de Grupo (Edita Mensagem)
+    if (callbackData === "p_br" || callbackData === "p_int") {
+      const groupKey = callbackData.split("_")[1];
+      const config = getPlansConfig();
+      const groupConfig = config[groupKey];
+      
+      const keyboard = Object.keys(groupConfig.plans).map(key => ([{
+        text: `${groupConfig.plans[key].label} - ${groupConfig.plans[key].price_display}`,
+        callback_data: `sel_${groupKey}_${key}`
+      }]));
+      keyboard.push([{ text: "⬅️ Voltar", callback_data: "back" }]);
+      
+      await editMessage(chatId, messageId, "Escolha seu plano:", { inline_keyboard: keyboard });
+      return;
+    }
+
+    // 4. Seleção de Plano -> Escolha de Método de Pagamento (Edita Mensagem)
+    if (callbackData && callbackData.startsWith("sel_")) {
       const parts = callbackData.split("_");
       const groupKey = parts[1];
       const planShortKey = parts[2];
+      
+      await editMessage(chatId, messageId, "Escolha o método de pagamento preferido:", {
+        inline_keyboard: [
+          [{ text: "LivePix (Pix)", callback_data: `pay_${groupKey}_${planShortKey}_pix` }],
+          [{ text: "Criptomoeda (Trust Wallet)", callback_data: `pay_${groupKey}_${planShortKey}_crypto` }],
+          [{ text: "⬅️ Voltar", callback_data: `p_${groupKey}` }]
+        ]
+      });
+      return;
+    }
+
+    // 5. Finalização de Escolha (TRAVA O FLUXO - Nova Mensagem com Instruções)
+    if (callbackData && callbackData.startsWith("pay_")) {
+      const parts = callbackData.split("_");
+      const groupKey = parts[1];
+      const planShortKey = parts[2];
+      const method = parts[3];
+      
       const keyMap = { 'm': 'monthly', 'q': 'quarterly', 's': 'semiannual' };
       const planKey = keyMap[planShortKey] || planShortKey;
+      
+      let instr = "";
+      if (method === "pix") {
+        instr = `💎 *Metodo: LivePix*\n\nEfetue o pagamento no link abaixo:\n🔗 ${LIVEPIX_URL}\n\n`;
+      } else {
+        instr = `💎 *Metodo: Criptomoeda*\n\nTransfira para a carteira abaixo:\n\`${CRIPTO_WALLET}\`\n\n`;
+      }
+      
+      instr += "Assim que a Manu visualizar o comprovante, ela ja libera seu acesso exclusivo!\n\n🕒 Horario de Atendimento: 09:00 as 22:00 todos os dias.\n\n*Por favor, envie o comprovante (Foto ou PDF) agora:*";
 
-      console.log(`[COMPRA] Grupo=${groupKey}, Plano=${planKey}`);
+      // Edita a mensagem removendo botões de voltar (Trava o fluxo)
+      await editMessage(chatId, messageId, instr, null);
 
-      // Resposta com horário de atendimento
-      await sendMessage(chatId, "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat.\n\n🕒 Horario de Atendimento: 09:00 as 22:00 todos os dias.");
-
-      // Banco em segundo plano
+      // Salva no banco
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment");
-        PendingPayment.findByIdAndUpdate(
+        await PendingPayment.findByIdAndUpdate(
           chatId,
           { _id: chatId, userId, userName: username, groupKey, planKey, status: "awaiting_receipt" },
           { upsert: true, new: true }
@@ -108,12 +138,12 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 5. Recebimento de Comprovante (MENSAGEM COM HORÁRIO)
+    // 6. Recebimento de Comprovante
     if (message && (message.photo || message.document)) {
-      await sendMessage(chatId, "Comprovante recebido com sucesso!\n\n🕒 Horario de Atendimento: 09:00 as 22:00 todos os dias.\n\nAguarde um momento, em breve seu acesso sera liberado!");
+      await sendMessage(chatId, "Comprovante recebido com sucesso! Agora e so aguardar a Manu dar aquela conferida e seu link chegara aqui. Fique tranquilo(a), ela faz as liberacoes todos os dias das 09:00 as 22:00.");
 
       if (OWNER_TELEGRAM_ID) {
-        await sendMessage(OWNER_TELEGRAM_ID, `NOVO COMPROVANTE\nUsuario: @${username}\nID: ${chatId}\nPara aprovar use: /aprovar ${chatId}`);
+        await sendMessage(OWNER_TELEGRAM_ID, `🔔 NOVO COMPROVANTE\nUsuario: @${username}\nID: ${chatId}\nPara aprovar use: /aprovar ${chatId}`);
         await axios.post(`${TELEGRAM_API}/forwardMessage`, {
           chat_id: OWNER_TELEGRAM_ID,
           from_chat_id: chatId,
@@ -123,7 +153,7 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 6. Aprovação
+    // 7. Aprovação
     if (text && text.startsWith("/aprovar")) {
       await handleApproval(chatId, userId, username, text);
     }
@@ -179,11 +209,20 @@ function getPlansConfig() {
 
 async function sendMessage(chatId, text, reply_markup = null) {
   try { 
-    const payload = { chat_id: chatId, text: text };
+    const payload = { chat_id: chatId, text: text, parse_mode: "Markdown" };
     if (reply_markup) payload.reply_markup = reply_markup;
     await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
-  } catch (e) { 
-    console.error(`ERRO ENVIO TELEGRAM (ChatID: ${chatId}):`, e.response ? e.response.data : e.message);
+  } catch (e) {}
+}
+
+async function editMessage(chatId, messageId, text, reply_markup = null) {
+  try {
+    const payload = { chat_id: chatId, message_id: messageId, text: text, parse_mode: "Markdown" };
+    if (reply_markup) payload.reply_markup = reply_markup;
+    await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
+  } catch (e) {
+    // Se não conseguir editar (ex: mensagem igual), tenta enviar uma nova
+    await sendMessage(chatId, text, reply_markup);
   }
 }
 
