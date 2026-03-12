@@ -52,11 +52,13 @@ app.post("/telegram", async (req, res) => {
 
     // Lógica de Planos (Callback)
     if (callbackData?.startsWith("plans_")) {
-      const groupKey = callbackData.split("_")[1]
-      const plans = getPlansConfig()[groupKey]?.plans
-      if (plans) {
-        const keyboard = Object.keys(plans).map(key => ([{
-          text: `${plans[key].label} - ${plans[key].price_display}`,
+      const groupKey = callbackData.split("_")[1] // 'br' ou 'int'
+      const config = getPlansConfig()
+      const groupConfig = config[groupKey]
+      
+      if (groupConfig) {
+        const keyboard = Object.keys(groupConfig.plans).map(key => ([{
+          text: `${groupConfig.plans[key].label} - ${groupConfig.plans[key].price_display}`,
           callback_data: `buy_${groupKey}_${key}`
         }]))
         keyboard.push([{ text: "⬅️ Voltar", callback_data: "back_to_start" }])
@@ -141,10 +143,11 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
   if (!payment) return await sendMessage(adminChatId, `Pagamento não encontrado para o ID: ${clientId}`)
 
   const plansConfig = getPlansConfig()
-  const plan = plansConfig[payment.groupKey]?.plans[payment.planKey]
-  const groupId = plansConfig[payment.groupKey]?.group_id
+  const groupConfig = plansConfig[payment.groupKey]
+  const plan = groupConfig?.plans[payment.planKey]
+  const groupId = groupConfig?.group_id
 
-  if (!plan || !groupId) return await sendMessage(adminChatId, "Erro: Configuração de plano/grupo não encontrada.")
+  if (!plan || !groupId) return await sendMessage(adminChatId, `Erro: Configuração de plano (${payment.planKey}) ou grupo (${payment.groupKey}) não encontrada.`)
 
   try {
     const expire = Math.floor(Date.now() / 1000) + (30 * 60)
@@ -166,7 +169,7 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
       inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] 
     })
     await PendingPayment.deleteOne({ _id: clientId })
-    await sendMessage(adminChatId, `✅ Sucesso! @${payment.userName} aprovado e link de uso único enviado.`)
+    await sendMessage(adminChatId, `✅ Sucesso! @${payment.userName} aprovado e link de uso único enviado para o grupo ${payment.groupKey.toUpperCase()}.`)
 
   } catch (e) {
     console.error("Erro na aprovação:", e.message)
