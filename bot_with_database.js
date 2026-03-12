@@ -5,6 +5,7 @@ const mongoose = require("mongoose")
 const { google } = require("googleapis")
 
 const app = express()
+// Railway injeta a porta automaticamente na variável PORT
 const PORT = process.env.PORT || 3000
 
 // TELEGRAM
@@ -122,6 +123,7 @@ const subscriptionSchema = new mongoose.Schema({
 const PendingPayment = mongoose.model("PendingPayment", pendingPaymentSchema)
 const Subscription = mongoose.model("Subscription", subscriptionSchema)
 
+// Middleware para processar JSON
 app.use(bodyParser.json())
 
 // TELEGRAM WEBHOOK
@@ -129,16 +131,17 @@ app.post("/telegram", async (req, res) => {
   const { message, callback_query } = req.body
   const callback = callback_query
 
-  if (!message && !callback) return res.sendStatus(200)
-
+  // Log para depuração no Railway
   console.log("Update recebido:", JSON.stringify(req.body, null, 2))
+
+  if (!message && !callback) return res.sendStatus(200)
 
   try {
     const chatId = message?.chat?.id || callback?.message?.chat?.id
     const userId = message?.from?.id || callback?.from?.id
     const username = message?.from?.username || callback?.from?.username || "User"
 
-    // START
+    // START - Usando startsWith para maior flexibilidade
     if (message?.text?.startsWith("/start")) {
       console.log(`Comando /start recebido de ${username} (ID: ${userId}) no chat ${chatId}`)
       const response = await axios.post(`${TELEGRAM_API}/sendMessage`, {
@@ -364,8 +367,9 @@ async function start() {
       }
     }
 
-    app.listen(PORT, () => {
-      console.log("Servidor rodando porta", PORT)
+    // CRUCIAL: No Railway, a aplicação DEVE ouvir em 0.0.0.0
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Servidor rodando em 0.0.0.0:${PORT}`)
     })
   } catch (err) {
     console.error("Erro fatal no início do bot:", err.message)
