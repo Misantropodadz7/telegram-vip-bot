@@ -34,19 +34,13 @@ let authClient = null
 
 async function initializeGoogleSheets() {
   try {
-    const keyFile = process.env.GOOGLE_CREDENTIALS_PATH || "./google-credentials.json"
-    
-    if (!fs.existsSync(keyFile)) {
-      console.warn("⚠️ Google Sheets credentials file not found. Skipping Google Sheets integration.")
-      return false
-    }
+    const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON)
 
-    const credentials = JSON.parse(fs.readFileSync(keyFile, "utf8"))
+authClient = new google.auth.GoogleAuth({
+  credentials,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+})
     
-    authClient = new google.auth.GoogleAuth({
-      keyFile,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-    })
 
     sheetsClient = google.sheets({ version: "v4", auth: authClient })
     console.log("✅ Google Sheets API initialized successfully")
@@ -898,3 +892,4 @@ async function startServer() {
 }
 
 startServer()
+
