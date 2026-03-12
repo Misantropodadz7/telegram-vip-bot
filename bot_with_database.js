@@ -305,7 +305,29 @@ async function start() {
       process.exit(1)
     }
 
-    await mongoose.connect(MONGODB_URI)
+    // Tratamento para senhas com caracteres especiais como @
+    let connectionUri = MONGODB_URI;
+    if (MONGODB_URI.includes(":") && MONGODB_URI.includes("@")) {
+      try {
+        const parts = MONGODB_URI.split("@");
+        const authPart = parts[0]; // mongodb+srv://user:password
+        const hostPart = parts.slice(1).join("@"); // host.mongodb.net/...
+        
+        if (authPart.includes("://")) {
+          const protocol = authPart.split("://")[0];
+          const credentials = authPart.split("://")[1];
+          if (credentials.includes(":")) {
+            const user = credentials.split(":")[0];
+            const password = credentials.split(":").slice(1).join(":");
+            connectionUri = `${protocol}://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${hostPart}`;
+          }
+        }
+      } catch (e) {
+        console.log("Aviso: Não foi possível codificar a URI, tentando conexão direta.");
+      }
+    }
+
+    await mongoose.connect(connectionUri)
     console.log("MongoDB conectado")
 
     await initializeGoogleSheets()
@@ -324,7 +346,6 @@ async function start() {
 }
 
 start()
-
 
 
 
