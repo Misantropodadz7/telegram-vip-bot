@@ -5,366 +5,178 @@ const mongoose = require("mongoose")
 const { google } = require("googleapis")
 
 const app = express()
+
+// CRUCIAL: No Railway, a porta DEVE vir da variável PORT.
+// Se não existir, usamos 3000 como fallback, mas o Railway sempre injeta.
 const PORT = process.env.PORT || 3000
 
 // TELEGRAM
 const BOT_TOKEN = process.env.BOT_TOKEN
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`
 
-// PAGAMENTO
-const TRUST_WALLET_ADDRESS = process.env.TRUST_WALLET_ADDRESS?.trim() || ""
-const LIVEPIX_URL = process.env.LIVEPIX_URL?.trim() || ""
+// VARIÁVEIS DE AMBIENTE (Limpando espaços em branco)
 const OWNER_TELEGRAM_ID = process.env.OWNER_TELEGRAM_ID?.trim() || ""
-
-// GRUPOS
+const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL?.trim() || ""
+const MONGODB_URI = process.env.MONGODB_URI?.trim() || ""
+const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID?.trim() || ""
 const VIP_BR_GROUP_ID = process.env.GROUP_ID_BR?.trim() || ""
 const VIP_INT_GROUP_ID = process.env.GROUP_ID_INT?.trim() || ""
 
-// OUTROS
-const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL?.trim() || ""
-const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL?.trim() || ""
-const MONGODB_URI = process.env.MONGODB_URI
-const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID || ""
-
 let sheetsClient = null
 
-// GOOGLE SHEETS
-async function initializeGoogleSheets() {
-  try {
-    if (!process.env.GOOGLE_CREDENTIALS_JSON) {
-      console.log("Google Sheets não configurado")
-      return
-    }
-
-    const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON)
-
-    const auth = new google.auth.GoogleAuth({
-      credentials,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-    })
-
-    sheetsClient = google.sheets({
-      version: "v4",
-      auth
-    })
-
-    console.log("Google Sheets conectado")
-  } catch (err) {
-    console.log("Erro Google Sheets:", err.message)
-  }
-}
-
-// Função para salvar na planilha
-async function saveToSheets(data) {
-  if (!sheetsClient || !GOOGLE_SHEETS_ID) return;
-  try {
-    await sheetsClient.spreadsheets.values.append({
-      spreadsheetId: GOOGLE_SHEETS_ID,
-      range: "Página1!A:E", 
-      valueInputOption: "USER_ENTERED",
-      resource: {
-        values: [[
-          new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
-          data.userId,
-          data.userName,
-          data.groupKey,
-          data.planKey
-        ]]
-      }
-    });
-    console.log("Dados salvos na planilha");
-  } catch (err) {
-    console.log("Erro ao salvar na planilha:", err.message);
-  }
-}
-
-// PLANOS
-const plansConfig = {
-  br: {
-    group_id: VIP_BR_GROUP_ID,
-    plans: {
-      monthly: { label: "Mensal", price_display: "R$ 29,90", price_usd: "6", days: 30 },
-      quarterly: { label: "Trimestral", price_display: "R$ 76,24", price_usd: "15", days: 90 },
-      semiannual: { label: "Semestral", price_display: "R$ 134,55", price_usd: "33", days: 180 }
-    }
-  },
-  int: {
-    group_id: VIP_INT_GROUP_ID,
-    plans: {
-      monthly: { label: "Monthly", price_display: "$11", price_usd: "11", days: 30 },
-      quarterly: { label: "Quarterly", price_display: "$28", price_usd: "28", days: 90 },
-      semiannual: { label: "Semestral", price_display: "$49", price_usd: "49", days: 180 }
-    }
-  }
-}
-
-// SCHEMAS
-const pendingPaymentSchema = new mongoose.Schema({
-  _id: Number,
-  userId: Number,
-  userName: String,
-  groupKey: String,
-  planKey: String,
-  paymentMethod: String,
-  timestamp: { type: Date, default: Date.now }
-})
-
-const subscriptionSchema = new mongoose.Schema({
-  _id: Number,
-  userId: Number,
-  chatId: Number,
-  groupKey: String,
-  planKey: String,
-  expiresAt: Date,
-  status: { type: String, default: "active" }
-})
-
-const PendingPayment = mongoose.model("PendingPayment", pendingPaymentSchema)
-const Subscription = mongoose.model("Subscription", subscriptionSchema)
-
+// MIDDLEWARES - Configuração robusta do BodyParser
 app.use(bodyParser.json())
+app.use(bodyParser.urlencoded({ extended: true }))
 
-// Rota raiz para teste no navegador
+// ROTA DE TESTE (Para você abrir no navegador e ver se o Railway está OK)
 app.get("/", (req, res) => {
-  res.send("Bot Online! Se você está vendo isso, o Railway está funcionando corretamente.")
+  res.send(`<h1>Bot Online!</h1><p>Porta: ${PORT}</p><p>Status: Ativo e aguardando Telegram.</p>`)
 })
 
-// TELEGRAM WEBHOOK
+// ROTA DE SAÚDE (Usada por alguns serviços de monitoramento)
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", uptime: process.uptime() })
+})
+
+// TELEGRAM WEBHOOK - O coração do Bot
 app.post("/telegram", async (req, res) => {
+  // Log imediato para confirmarmos no painel do Railway
+  console.log("--- NOVO UPDATE RECEBIDO DO TELEGRAM ---")
+  console.log(JSON.stringify(req.body, null, 2))
+
   const { message, callback_query } = req.body
   const callback = callback_query
 
-  // Log crucial para depuração
-  console.log("Update recebido:", JSON.stringify(req.body, null, 2))
-
-  if (!message && !callback) return res.sendStatus(200)
+  // Responde OK imediatamente para o Telegram não reenviar a mesma mensagem (evita loop)
+  res.sendStatus(200)
 
   try {
     const chatId = message?.chat?.id || callback?.message?.chat?.id
     const userId = message?.from?.id || callback?.from?.id
     const username = message?.from?.username || callback?.from?.username || "User"
+    const text = message?.text || ""
 
-    // START
-    if (message?.text?.startsWith("/start")) {
-      console.log(`Comando /start recebido de ${username} (ID: ${userId}) no chat ${chatId}`)
-      const response = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+    // Lógica do Comando /start
+    if (text.startsWith("/start")) {
+      console.log(`Processando /start para: ${username} (${userId})`)
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: "Escolha seu grupo VIP",
+        text: "Escolha seu grupo VIP:",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "VIP BR", callback_data: "plans_br" }],
-            [{ text: "VIP INT", callback_data: "plans_int" }]
+            [{ text: "VIP BR 🇧🇷", callback_data: "plans_br" }],
+            [{ text: "VIP INT 🌎", callback_data: "plans_int" }]
           ]
         }
       })
-      console.log("Resposta do Telegram ao /start:", response.data)
     }
 
-    // PLANOS
+    // Lógica de Planos (Callback Query)
     if (callback && callback.data.startsWith("plans_")) {
       const groupKey = callback.data.split("_")[1]
-      const config = plansConfig[groupKey]
+      const plans = {
+        br: [
+          { label: "Mensal", price: "R$ 29,90", key: "monthly" },
+          { label: "Trimestral", price: "R$ 76,24", key: "quarterly" },
+          { label: "Semestral", price: "R$ 134,55", key: "semiannual" }
+        ],
+        int: [
+          { label: "Monthly", price: "$11", key: "monthly" },
+          { label: "Quarterly", price: "$28", key: "quarterly" },
+          { label: "Semiannual", price: "$49", key: "semiannual" }
+        ]
+      }
 
-      const keyboard = Object.keys(config.plans).map(p => {
-        const plan = config.plans[p]
-        return [{
-          text: `${plan.label} - ${plan.price_display}`,
-          callback_data: `buy_${groupKey}_${p}`
-        }]
-      })
+      const keyboard = plans[groupKey].map(p => ([{
+        text: `${p.label} - ${p.price}`,
+        callback_data: `buy_${groupKey}_${p.key}`
+      }]))
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: "Escolha seu plano",
-        reply_markup: {
-          inline_keyboard: keyboard
-        }
+        text: "Escolha seu plano:",
+        reply_markup: { inline_keyboard: keyboard }
       })
     }
 
-    // COMPRA
+    // Lógica de Compra (Início do Checkout)
     if (callback && callback.data.startsWith("buy_")) {
       const [, groupKey, planKey] = callback.data.split("_")
-
-      await PendingPayment.findByIdAndUpdate(
-        chatId,
-        {
-          _id: chatId,
-          userId,
-          userName: username,
-          groupKey,
-          planKey
-        },
-        { upsert: true }
-      )
+      
+      // Salva intenção de compra no Banco (se conectado)
+      if (mongoose.connection.readyState === 1) {
+        const PendingPayment = mongoose.model("PendingPayment")
+        await PendingPayment.findByIdAndUpdate(
+          chatId,
+          { _id: chatId, userId, userName: username, groupKey, planKey },
+          { upsert: true }
+        )
+      }
 
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: "Envie o comprovante aqui"
+        text: "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat."
       })
     }
 
-    // RECEBER COMPROVANTE
+    // Recebimento de Comprovante
     if (message?.photo || message?.document) {
-      const payment = await PendingPayment.findById(chatId)
-      if (!payment) return res.sendStatus(200)
-
+      console.log(`Comprovante recebido de ${username}`)
       if (OWNER_TELEGRAM_ID) {
         await axios.post(`${TELEGRAM_API}/sendMessage`, {
           chat_id: OWNER_TELEGRAM_ID,
-          text: `Comprovante recebido de @${payment.userName}\nID: ${chatId}`
+          text: `🔔 NOVO COMPROVANTE\nUsuário: @${username}\nID: ${chatId}\nVerifique o chat com o bot.`
         })
       }
-
       await axios.post(`${TELEGRAM_API}/sendMessage`, {
         chat_id: chatId,
-        text: "Comprovante recebido. Aguarde aprovação."
+        text: "Comprovante recebido com sucesso! Aguarde a aprovação manual do administrador."
       })
     }
 
-    // APROVAR
-    if (message?.text?.startsWith("/aprovar")) {
-      if (userId.toString() !== OWNER_TELEGRAM_ID) return res.sendStatus(200)
-
-      const clientId = parseInt(message.text.split(" ")[1])
-      const payment = await PendingPayment.findById(clientId)
-
-      if (!payment) return res.sendStatus(200)
-
-      const plan = plansConfig[payment.groupKey].plans[payment.planKey]
-      const invite = await generateInvite(plansConfig[payment.groupKey].group_id)
-
-      if (!invite) {
-        await axios.post(`${TELEGRAM_API}/sendMessage`, {
-          chat_id: clientId,
-          text: "Erro ao gerar link de acesso."
-        })
-        return res.sendStatus(200)
-      }
-
-      const expires = new Date(Date.now() + plan.days * 86400000)
-
-      await Subscription.findByIdAndUpdate(
-        payment.userId,
-        {
-          _id: payment.userId,
-          userId: payment.userId,
-          chatId: clientId,
-          groupKey: payment.groupKey,
-          planKey: payment.planKey,
-          expiresAt: expires
-        },
-        { upsert: true }
-      )
-
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: clientId,
-        text: "Pagamento aprovado",
-        reply_markup: {
-          inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]]
-        }
-      })
-
-      // Salvar na planilha ao aprovar
-      await saveToSheets(payment);
-
-      await PendingPayment.deleteOne({ _id: clientId })
-    }
-
-    res.sendStatus(200)
   } catch (err) {
-    console.log("Erro telegram:", err.message)
-    res.sendStatus(200)
+    console.error("Erro no processamento do Telegram:", err.message)
   }
 })
 
-// GERAR LINK
-async function generateInvite(groupId) {
+// INICIALIZAÇÃO DE BANCO E GOOGLE (Assíncrona para não travar o Railway)
+async function connectServices() {
   try {
-    const expire = Math.floor(Date.now() / 1000) + (30 * 60)
-    const r = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
-      chat_id: groupId,
-      member_limit: 1,
-      expire_date: expire
-    })
-    return r.data.result.invite_link
-  } catch (err) {
-    console.log("Erro link:", err.message)
-    return null
-  }
-}
-
-// HEALTH
-app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    time: new Date()
-  })
-})
-
-// INICIALIZAÇÃO ASSÍNCRONA
-async function initializeDependencies() {
-  try {
-    if (!BOT_TOKEN) {
-      console.error("BOT_TOKEN não configurado")
-      return
-    }
-
-    if (!MONGODB_URI || MONGODB_URI.trim() === "") {
-      console.error("MONGODB_URI está vazia ou não configurada")
-      return
-    }
-
-    // Lógica robusta para tratar caracteres especiais na senha
-    let connectionUri = MONGODB_URI;
-    if (MONGODB_URI.includes("@") && MONGODB_URI.includes("mongodb+srv://")) {
-      try {
-        const protocol = "mongodb+srv://";
-        const withoutProtocol = MONGODB_URI.replace(protocol, "");
-        const atIndex = withoutProtocol.indexOf("@");
-        if (atIndex !== -1) {
-          const credentials = withoutProtocol.substring(0, atIndex);
-          const host = withoutProtocol.substring(atIndex + 1);
-          const colonIndex = credentials.indexOf(":");
-          if (colonIndex !== -1) {
-            const user = credentials.substring(0, colonIndex);
-            const password = credentials.substring(colonIndex + 1);
-            connectionUri = `${protocol}${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}`;
-          }
-        }
-      } catch (e) {
-        console.log("Aviso: Erro ao processar URI.");
+    if (MONGODB_URI) {
+      console.log("Conectando ao MongoDB...")
+      await mongoose.connect(MONGODB_URI)
+      console.log("MongoDB OK")
+      
+      // Define Schemas se necessário (exemplo rápido)
+      if (!mongoose.models.PendingPayment) {
+        mongoose.model("PendingPayment", new mongoose.Schema({
+          _id: Number, userId: Number, userName: String, groupKey: String, planKey: String, timestamp: { type: Date, default: Date.now }
+        }))
       }
     }
 
-    console.log("Tentando conectar ao MongoDB...");
-    await mongoose.connect(connectionUri, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    })
-    console.log("MongoDB conectado com sucesso")
-
-    await initializeGoogleSheets()
-
-    if (WEBHOOK_BASE_URL) {
-      console.log(`Configurando Webhook para: ${WEBHOOK_BASE_URL}/telegram`);
-      try {
-        const response = await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_BASE_URL}/telegram`);
-        console.log("Resposta do Telegram ao configurar Webhook:", response.data);
-      } catch (webhookErr) {
-        console.error("Erro ao chamar API do Telegram para Webhook:", webhookErr.message);
-      }
+    if (WEBHOOK_BASE_URL && BOT_TOKEN) {
+      const url = `${WEBHOOK_BASE_URL}/telegram`
+      console.log(`Configurando Webhook para: ${url}`)
+      const res = await axios.get(`${TELEGRAM_API}/setWebhook?url=${url}`)
+      console.log("Status Webhook Telegram:", res.data.description)
     }
-  } catch (err) {
-    console.error("Erro fatal na inicialização:", err.message)
+  } catch (e) {
+    console.error("Erro ao conectar serviços:", e.message)
   }
 }
 
-// O servidor Express sobe PRIMEIRO para o Railway aceitar o tráfego
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Servidor rodando em 0.0.0.0:${PORT}`)
-  console.log("Iniciando conexões externas (MongoDB, Google Sheets)...")
+// INICIALIZAÇÃO DO SERVIDOR (A parte mais importante para o Erro 502)
+// Ouvir em 0.0.0.0 é obrigatório.
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`>>> SERVIDOR RODANDO EM 0.0.0.0:${PORT} <<<`)
+  console.log("Railway deve agora detectar a aplicação como saudável.")
   
-  // Inicia conexões em segundo plano
-  initializeDependencies()
+  // Inicia as conexões pesadas DEPOIS que o servidor já está "vivo"
+  connectServices()
+})
+
+// Tratamento de erros do servidor
+server.on('error', (e) => {
+  console.error("ERRO NO SERVIDOR EXPRESS:", e.message)
 })
