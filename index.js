@@ -162,7 +162,7 @@ function startSubscriptionMonitoring() {
   // Configurar intervalo para verificar periodicamente
   setInterval(() => {
     checkAndRemoveExpiredSubscriptions()
-  }, 5 * 60 * 1000) // 5 minutos
+  }, 1 * 60 * 1000) // 1 minuto
 }
 
 // ─── Webhook do Telegram ──────────────────────────────────────────────────────
@@ -667,4 +667,5 @@ app.listen(PORT, () => {
   // Iniciar monitoramento de assinaturas
   startSubscriptionMonitoring()
 })
+
 
