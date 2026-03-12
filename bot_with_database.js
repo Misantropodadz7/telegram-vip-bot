@@ -59,7 +59,6 @@ app.post("/telegram", async (req, res) => {
           text: `${plans[key].label} - ${plans[key].price_display}`,
           callback_data: `buy_${groupKey}_${key}`
         }]))
-        // Adiciona botão para voltar ao menu inicial
         keyboard.push([{ text: "⬅️ Voltar", callback_data: "back_to_start" }])
         await sendMessage(chatId, "Escolha seu plano:", { inline_keyboard: keyboard })
       }
@@ -90,16 +89,13 @@ app.post("/telegram", async (req, res) => {
       }
     }
 
-    // RECEBIMENTO E ENCAMINHAMENTO DE COMPROVANTE (Com Aviso de Horário)
+    // RECEBIMENTO E ENCAMINHAMENTO DE COMPROVANTE
     if (message?.photo || message?.document) {
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment")
         const payment = await PendingPayment.findById(chatId)
 
         if (payment && payment.status === "awaiting_receipt") {
-          console.log(`Comprovante recebido de ${username}`)
-          
-          // Mensagem de confirmação com aviso de horário
           await sendMessage(chatId, "✅ Comprovante recebido com sucesso!\n\n🕒 **Horário de Atendimento:**\nAs aprovações são feitas todos os dias das **09:00 às 22:00**.\n\nAguarde um momento, em breve seu acesso será liberado!")
 
           if (OWNER_TELEGRAM_ID) {
@@ -147,7 +143,6 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
   if (!plan || !groupId) return await sendMessage(adminChatId, "Erro: Configuração de plano/grupo não encontrada.")
 
   try {
-    // Link de convite de USO ÚNICO e expira em 30 minutos
     const expire = Math.floor(Date.now() / 1000) + (30 * 60)
     const r = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
       chat_id: groupId,
@@ -190,7 +185,7 @@ function getPlansConfig() {
       plans: {
         monthly: { label: "Monthly", price_display: "$11", days: 30 },
         quarterly: { label: "Quarterly", price_display: "$28", days: 90 },
-        semiannual: { label: "Semestral", price_display: "$49", days: 180 }
+        semiannual: { label: "Semiannual", price_display: "$49", days: 180 }
       }
     }
   }
