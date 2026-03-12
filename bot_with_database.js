@@ -78,6 +78,8 @@ app.post("/telegram", async (req, res) => {
     // Lógica de Compra (Início do Checkout)
     if (callbackData?.startsWith("buy_")) {
       const [, groupKey, planKey] = callbackData.split("_")
+      console.log(`Iniciando compra: Grupo=${groupKey}, Plano=${planKey}`)
+      
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment")
         await PendingPayment.findByIdAndUpdate(
@@ -86,6 +88,8 @@ app.post("/telegram", async (req, res) => {
           { upsert: true, new: true }
         )
         await sendMessage(chatId, "Por favor, envie o comprovante de pagamento (Foto ou PDF) aqui no chat.")
+      } else {
+        await sendMessage(chatId, "O banco de dados está conectando, tente novamente em 1 minuto.")
       }
     }
 
