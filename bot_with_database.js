@@ -175,6 +175,7 @@ app.post("/telegram", async (req, res) => {
     // 7. Comandos Admin
     if (text && text.startsWith("/aprovar")) await handleApproval(chatId, userId, text);
     if (text && text.startsWith("/reprovar")) await handleRejection(chatId, userId, text);
+    if (text && text.startsWith("/remover")) await handleRemoval(chatId, userId, text);
 
   } catch (err) { console.error("Erro no webhook:", err.message); }
 });
@@ -223,7 +224,7 @@ async function handleApproval(adminChatId, adminUserId, text) {
       daysRemaining, 
       "ATIVO", 
       method
-    ]);
+    ], "Assinaturas");
 
     await PendingPayment.deleteOne({ _id: clientId });
     await sendMessage(adminChatId, `Sucesso! @${payment.userName} aprovado.`);
@@ -247,9 +248,39 @@ async function handleRejection(adminChatId, adminUserId, text) {
   } catch (e) { await sendMessage(adminChatId, "Erro ao reprovar."); }
 }
 
+async function handleRemoval(adminChatId, adminUserId, text) {
+  if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
+  const parts = text.split(" ");
+  if (parts.length < 2) return await sendMessage(adminChatId, "Use: /remover <ID>");
+  const clientId = parts[1];
+
+  try {
+    const Subscription = mongoose.model("Subscription");
+    const sub = await Subscription.findById(clientId);
+    if (!sub) return await sendMessage(adminChatId, "Assinatura nao encontrada.");
+
+    const config = getPlansConfig();
+    const groupId = config[sub.groupKey]?.group_id;
+
+    // Remover do grupo Telegram
+    await axios.post(`${TELEGRAM_API}/banChatMember`, { chat_id: groupId, user_id: clientId }).catch(e => console.log("Erro ban"));
+    await axios.post(`${TELEGRAM_API}/unbanChatMember`, { chat_id: groupId, user_id: clientId, only_if_banned: true }).catch(e => console.log("Erro unban"));
+
+    // Registrar na aba Removidos
+    const removalDate = new Date().toLocaleString("pt-BR");
+    await appendToSheets([clientId, sub.groupKey.toUpperCase(), removalDate], "Removidos");
+
+    // Atualizar status no banco ou deletar
+    await Subscription.findByIdAndUpdate(clientId, { status: "expired" });
+
+    await sendMessage(clientId, "Sua assinatura expirou ou foi encerrada. Caso queira renovar, use /start.");
+    await sendMessage(adminChatId, `Sucesso! Usuário ${clientId} removido e registrado na planilha.`);
+  } catch (e) { await sendMessage(adminChatId, "Erro ao remover usuário."); }
+}
+
 // --- GOOGLE SHEETS --- //
 
-async function appendToSheets(rowData) {
+async function appendToSheets(rowData, sheetName = "Assinaturas") {
   if (!GOOGLE_SHEETS_ID || !googleAuthData.email || !googleAuthData.key) {
     console.log("Configuração de Sheets incompleta.");
     return;
@@ -257,14 +288,18 @@ async function appendToSheets(rowData) {
   try {
     const auth = new google.auth.JWT(googleAuthData.email, null, googleAuthData.key, ["https://www.googleapis.com/auth/spreadsheets"]);
     const sheets = google.sheets({ version: "v4", auth });
+    
+    // Define o range com base na aba (Assinaturas tem 9 colunas, Removidos tem 3)
+    const range = sheetName === "Assinaturas" ? "Assinaturas!A:I" : "Removidos!A:C";
+    
     await sheets.spreadsheets.values.append({
       spreadsheetId: GOOGLE_SHEETS_ID,
-      range: "Assinaturas!A:I",
+      range: range,
       valueInputOption: "USER_ENTERED",
       resource: { values: [rowData] }
     });
-    console.log("Sheets atualizado!");
-  } catch (e) { console.error("Erro Sheets:", e.message); }
+    console.log(`Sheets (${sheetName}) atualizado!`);
+  } catch (e) { console.error(`Erro Sheets (${sheetName}):`, e.message); }
 }
 
 function getPlansConfig() {
