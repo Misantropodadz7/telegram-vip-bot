@@ -2,6 +2,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const axios = require("axios");
 const mongoose = require("mongoose");
+const { google } = require("googleapis");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -18,9 +19,30 @@ const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL?.trim() || "https://
 const VIP_BR_GROUP_ID = process.env.GROUP_ID_BR?.trim() || "";
 const VIP_INT_GROUP_ID = process.env.GROUP_ID_INT?.trim() || "";
 
-// PAGAMENTO (VARIÁVEIS)
+// PAGAMENTO
 const LIVEPIX_URL = process.env.LIVEPIX_URL?.trim() || "Chave Pix não configurada";
-const CRIPTO_WALLET = process.env.CRIPTO_WALLET?.trim() || "Carteira Cripto não configurada";
+const CRIPTO_WALLET_USDT_TRON = "TRcZMiKsHDWnjTPpDpTzX9iC9y2Rd12u2b"; // Carteira USDT (Tron)
+
+// GOOGLE SHEETS (SUPORTE A JSON)
+const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID?.trim() || "";
+const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON;
+
+let googleAuthData = {
+  email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim() || "",
+  key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n").trim() || ""
+};
+
+// Se o JSON estiver presente, extrai os dados dele
+if (GOOGLE_CREDENTIALS_JSON) {
+  try {
+    const creds = JSON.parse(GOOGLE_CREDENTIALS_JSON);
+    googleAuthData.email = creds.client_email;
+    googleAuthData.key = creds.private_key.replace(/\\n/g, "\n");
+    console.log("Credenciais do Google carregadas via JSON com sucesso!");
+  } catch (e) {
+    console.error("Erro ao processar GOOGLE_CREDENTIALS_JSON:", e.message);
+  }
+}
 
 // MIDDLEWARES
 app.use(bodyParser.json());
@@ -28,7 +50,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // ROTA DE TESTE
 app.get("/", (req, res) => {
-  res.send(`<h1>Bot VIP Interativo Online!</h1><p>Status: Operacional e Organizado.</p>`);
+  res.send(`<h1>Bot VIP Ativo!</h1><p>Status: Suporte a Credenciais JSON habilitado.</p>`);
 });
 
 // TELEGRAM WEBHOOK
@@ -44,11 +66,7 @@ app.post("/telegram", async (req, res) => {
     const text = message?.text || "";
     const callbackData = callback_query?.data;
 
-    if (text || callbackData) {
-      console.log(`>>> RECEBIDO: ${text || callbackData} de @${username} <<<`);
-    }
-
-    // 1. Comando /start (Nova Mensagem Limpa)
+    // 1. Comando /start
     if (text && text.startsWith("/start")) {
       await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
@@ -60,7 +78,7 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 2. Voltar para o Início (Edita Mensagem)
+    // 2. Voltar para o Início
     if (callbackData === "back") {
       await editMessage(chatId, messageId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
@@ -72,7 +90,7 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 3. Escolha de Grupo (Edita Mensagem)
+    // 3. Escolha de Grupo
     if (callbackData === "p_br" || callbackData === "p_int") {
       const groupKey = callbackData.split("_")[1];
       const config = getPlansConfig();
@@ -88,7 +106,7 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 4. Seleção de Plano -> Escolha de Método de Pagamento (Edita Mensagem)
+    // 4. Seleção de Plano -> Método de Pagamento
     if (callbackData && callbackData.startsWith("sel_")) {
       const parts = callbackData.split("_");
       const groupKey = parts[1];
@@ -97,75 +115,73 @@ app.post("/telegram", async (req, res) => {
       await editMessage(chatId, messageId, "Escolha o método de pagamento preferido:", {
         inline_keyboard: [
           [{ text: "LivePix (Pix)", callback_data: `pay_${groupKey}_${planShortKey}_pix` }],
-          [{ text: "Criptomoeda (Trust Wallet)", callback_data: `pay_${groupKey}_${planShortKey}_crypto` }],
+          [{ text: "USDT (Rede Tron)", callback_data: `pay_${groupKey}_${planShortKey}_crypto` }],
           [{ text: "⬅️ Voltar", callback_data: `p_${groupKey}` }]
         ]
       });
       return;
     }
 
-    // 5. Finalização de Escolha (TRAVA O FLUXO - Nova Mensagem com Instruções)
+    // 5. Finalização de Escolha
     if (callbackData && callbackData.startsWith("pay_")) {
       const parts = callbackData.split("_");
       const groupKey = parts[1];
       const planShortKey = parts[2];
       const method = parts[3];
       
+      const config = getPlansConfig();
+      const plan = config[groupKey].plans[planShortKey];
+      const groupName = groupKey === "br" ? "VIP BR 🇧🇷" : "VIP INT 🌎";
       const keyMap = { 'm': 'monthly', 'q': 'quarterly', 's': 'semiannual' };
       const planKey = keyMap[planShortKey] || planShortKey;
       
-      let instr = "";
+      let instr = `📦 *Plano Selecionado:* ${groupName} - ${plan.label}\n💰 *Valor:* ${plan.price_display}\n\n`;
       if (method === "pix") {
-        instr = `💎 *Metodo: LivePix*\n\nEfetue o pagamento no link abaixo:\n🔗 ${LIVEPIX_URL}\n\n`;
+        instr += `💎 *Metodo:* LivePix (Pix)\n🔗 [Clique aqui para pagar](${LIVEPIX_URL})\n\n`;
       } else {
-        instr = `💎 *Metodo: Criptomoeda*\n\nTransfira para a carteira abaixo:\n\`${CRIPTO_WALLET}\`\n\n`;
+        instr += `💎 *Metodo:* USDT (Rede Tron)\n🔗 *Carteira:* \`${CRIPTO_WALLET_USDT_TRON}\`\n\n`;
       }
-      
       instr += "Assim que a Manu visualizar o comprovante, ela ja libera seu acesso exclusivo!\n\n🕒 Horario de Atendimento: 09:00 as 22:00 todos os dias.\n\n*Por favor, envie o comprovante (Foto ou PDF) agora:*";
 
-      // Edita a mensagem removendo botões de voltar (Trava o fluxo)
       await editMessage(chatId, messageId, instr, null);
 
-      // Salva no banco
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment");
-        await PendingPayment.findByIdAndUpdate(
-          chatId,
-          { _id: chatId, userId, userName: username, groupKey, planKey, status: "awaiting_receipt" },
-          { upsert: true, new: true }
-        ).catch(e => console.log("Erro banco silenciado"));
+        await PendingPayment.findByIdAndUpdate(chatId, { _id: chatId, userId, userName: username, groupKey, planKey, status: "awaiting_receipt" }, { upsert: true, new: true }).catch(e => console.log("Erro banco"));
       }
       return;
     }
 
     // 6. Recebimento de Comprovante
     if (message && (message.photo || message.document)) {
-      await sendMessage(chatId, "Comprovante recebido com sucesso! Agora e so aguardar a Manu dar aquela conferida e seu link chegara aqui. Fique tranquilo(a), ela faz as liberacoes todos os dias das 09:00 as 22:00.");
-
-      if (OWNER_TELEGRAM_ID) {
-        await sendMessage(OWNER_TELEGRAM_ID, `🔔 NOVO COMPROVANTE\nUsuario: @${username}\nID: ${chatId}\nPara aprovar use: /aprovar ${chatId}`);
-        await axios.post(`${TELEGRAM_API}/forwardMessage`, {
-          chat_id: OWNER_TELEGRAM_ID,
-          from_chat_id: chatId,
-          message_id: message.message_id
-        }).catch(e => console.log("Erro forward"));
+      if (mongoose.connection.readyState === 1) {
+        const PendingPayment = mongoose.model("PendingPayment");
+        const payment = await PendingPayment.findById(chatId);
+        if (payment && payment.status === "awaiting_receipt") {
+          await sendMessage(chatId, "Comprovante recebido com sucesso! Agora e so aguardar a Manu dar aquela conferida e seu link chegara aqui. Fique tranquilo(a), ela faz as liberacoes todos os dias das 09:00 as 22:00.");
+          if (OWNER_TELEGRAM_ID) {
+            const config = getPlansConfig();
+            const plan = config[payment.groupKey]?.plans[payment.planKey === 'monthly' ? 'm' : payment.planKey === 'quarterly' ? 'q' : 's'];
+            const groupName = payment.groupKey === "br" ? "VIP BR 🇧🇷" : "VIP INT 🌎";
+            let adminMsg = `🔔 *NOVO COMPROVANTE*\n👤 @${username}\n🆔 \`${chatId}\`\n📦 ${groupName} - ${plan?.label}\n💰 ${plan?.price_display}\n\n/aprovar ${chatId}\n/reprovar ${chatId} <motivo>`;
+            await sendMessage(OWNER_TELEGRAM_ID, adminMsg);
+            await axios.post(`${TELEGRAM_API}/forwardMessage`, { chat_id: OWNER_TELEGRAM_ID, from_chat_id: chatId, message_id: message.message_id }).catch(e => console.log("Erro forward"));
+          }
+        }
       }
       return;
     }
 
-    // 7. Aprovação
-    if (text && text.startsWith("/aprovar")) {
-      await handleApproval(chatId, userId, username, text);
-    }
+    // 7. Comandos Admin
+    if (text && text.startsWith("/aprovar")) await handleApproval(chatId, userId, text);
+    if (text && text.startsWith("/reprovar")) await handleRejection(chatId, userId, text);
 
-  } catch (err) {
-    console.error("Erro no webhook:", err.message);
-  }
+  } catch (err) { console.error("Erro no webhook:", err.message); }
 });
 
-// --- FUNÇÕES DE APOIO --- //
+// --- FUNÇÕES ADMIN --- //
 
-async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
+async function handleApproval(adminChatId, adminUserId, text) {
   if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
   const parts = text.split(" ");
   if (parts.length < 2) return await sendMessage(adminChatId, "Use: /aprovar <ID>");
@@ -182,22 +198,57 @@ async function handleApproval(adminChatId, adminUserId, adminUsername, text) {
     const plan = config[payment.groupKey]?.plans[payment.planKey === 'monthly' ? 'm' : payment.planKey === 'quarterly' ? 'q' : 's'];
     const groupId = config[payment.groupKey]?.group_id;
 
-    const r = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
-      chat_id: groupId,
-      member_limit: 1,
-      expire_date: Math.floor(Date.now() / 1000) + 1800
-    });
+    const r = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, { chat_id: groupId, member_limit: 1, expire_date: Math.floor(Date.now() / 1000) + 1800 });
     const invite = r.data.result.invite_link;
 
     const expires = new Date(Date.now() + plan.days * 86400000);
     await Subscription.findByIdAndUpdate(payment.userId, { _id: payment.userId, userId: payment.userId, chatId: clientId, groupKey: payment.groupKey, planKey: payment.planKey, expiresAt: expires, status: "active" }, { upsert: true });
 
     await sendMessage(clientId, "Pagamento aprovado! Clique no botao para entrar no grupo:", { inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] });
+    
+    // Registrar no Sheets
+    await appendToSheets([new Date().toLocaleString("pt-BR"), payment.userName, payment.userId, payment.groupKey.toUpperCase(), plan.label, plan.price_display, "APROVADO"]);
+
     await PendingPayment.deleteOne({ _id: clientId });
     await sendMessage(adminChatId, `Sucesso! @${payment.userName} aprovado.`);
-  } catch (e) {
-    await sendMessage(adminChatId, "Erro na aprovacao. Verifique as permissoes.");
+  } catch (e) { await sendMessage(adminChatId, "Erro na aprovacao. Verifique permissoes."); }
+}
+
+async function handleRejection(adminChatId, adminUserId, text) {
+  if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
+  const parts = text.split(" ");
+  if (parts.length < 2) return await sendMessage(adminChatId, "Use: /reprovar <ID> <Motivo>");
+  const clientId = parts[1];
+  const reason = parts.slice(2).join(" ") || "Comprovante invalido ou pagamento nao recebido.";
+
+  try {
+    const PendingPayment = mongoose.model("PendingPayment");
+    const payment = await PendingPayment.findById(clientId);
+    if (!payment) return await sendMessage(adminChatId, "ID nao encontrado.");
+
+    await sendMessage(clientId, `❌ *Pagamento Reprovado*\n\nMotivo: ${reason}\n\nPor favor, envie o comprovante correto ou entre em contato.`);
+    await sendMessage(adminChatId, `Sucesso! @${payment.userName} reprovado.`);
+  } catch (e) { await sendMessage(adminChatId, "Erro ao reprovar."); }
+}
+
+// --- GOOGLE SHEETS --- //
+
+async function appendToSheets(rowData) {
+  if (!GOOGLE_SHEETS_ID || !googleAuthData.email || !googleAuthData.key) {
+    console.log("Configuração de Sheets incompleta.");
+    return;
   }
+  try {
+    const auth = new google.auth.JWT(googleAuthData.email, null, googleAuthData.key, ["https://www.googleapis.com/auth/spreadsheets"]);
+    const sheets = google.sheets({ version: "v4", auth });
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEETS_ID,
+      range: "Página1!A:G",
+      valueInputOption: "USER_ENTERED",
+      resource: { values: [rowData] }
+    });
+    console.log("Sheets atualizado!");
+  } catch (e) { console.error("Erro Sheets:", e.message); }
 }
 
 function getPlansConfig() {
@@ -220,10 +271,7 @@ async function editMessage(chatId, messageId, text, reply_markup = null) {
     const payload = { chat_id: chatId, message_id: messageId, text: text, parse_mode: "Markdown" };
     if (reply_markup) payload.reply_markup = reply_markup;
     await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
-  } catch (e) {
-    // Se não conseguir editar (ex: mensagem igual), tenta enviar uma nova
-    await sendMessage(chatId, text, reply_markup);
-  }
+  } catch (e) { await sendMessage(chatId, text, reply_markup); }
 }
 
 async function connectServices() {
