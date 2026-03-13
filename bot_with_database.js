@@ -147,7 +147,7 @@ app.post("/telegram", async (req, res) => {
 
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment");
-        await PendingPayment.findByIdAndUpdate(chatId, { _id: chatId, userId, userName: username, groupKey, planKey, status: "awaiting_receipt" }, { upsert: true, new: true }).catch(e => console.log("Erro banco"));
+        await PendingPayment.findByIdAndUpdate(chatId, { _id: chatId, userId, userName: username, groupKey, planKey, method, status: "awaiting_receipt" }, { upsert: true, new: true }).catch(e => console.log("Erro banco"));
       }
       return;
     }
@@ -207,7 +207,23 @@ async function handleApproval(adminChatId, adminUserId, text) {
     await sendMessage(clientId, "Pagamento aprovado! Clique no botao para entrar no grupo:", { inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] });
     
     // Registrar no Sheets
-    await appendToSheets([new Date().toLocaleString("pt-BR"), payment.userName, payment.userId, payment.groupKey.toUpperCase(), plan.label, plan.price_display, "APROVADO"]);
+    // Colunas: ID do Usuário, Nome, Grupo, Plano, Ativada em, Expira em, Dias Restantes, Status, Método de Pagamento
+    const activatedAt = new Date().toLocaleString("pt-BR");
+    const expiresAtStr = expires.toLocaleString("pt-BR");
+    const daysRemaining = plan.days;
+    const method = payment.method === "pix" ? "LivePix (Pix)" : "USDT (Rede Tron)";
+    
+    await appendToSheets([
+      payment.userId, 
+      payment.userName, 
+      payment.groupKey.toUpperCase(), 
+      plan.label, 
+      activatedAt, 
+      expiresAtStr, 
+      daysRemaining, 
+      "ATIVO", 
+      method
+    ]);
 
     await PendingPayment.deleteOne({ _id: clientId });
     await sendMessage(adminChatId, `Sucesso! @${payment.userName} aprovado.`);
@@ -243,7 +259,7 @@ async function appendToSheets(rowData) {
     const sheets = google.sheets({ version: "v4", auth });
     await sheets.spreadsheets.values.append({
       spreadsheetId: GOOGLE_SHEETS_ID,
-      range: "Página1!A:G",
+      range: "Assinaturas!A:I",
       valueInputOption: "USER_ENTERED",
       resource: { values: [rowData] }
     });
@@ -278,7 +294,7 @@ async function connectServices() {
   try {
     if (MONGODB_URI) {
       await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
-      const schemaP = new mongoose.Schema({ _id: Number, userId: Number, userName: String, groupKey: String, planKey: String, status: String, timestamp: { type: Date, default: Date.now } });
+      const schemaP = new mongoose.Schema({ _id: Number, userId: Number, userName: String, groupKey: String, planKey: String, method: String, status: String, timestamp: { type: Date, default: Date.now } });
       const schemaS = new mongoose.Schema({ _id: Number, userId: Number, chatId: Number, groupKey: String, planKey: String, expiresAt: Date, status: String });
       if (!mongoose.models.PendingPayment) mongoose.model("PendingPayment", schemaP);
       if (!mongoose.models.Subscription) mongoose.model("Subscription", schemaS);
