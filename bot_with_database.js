@@ -64,9 +64,10 @@ app.post("/telegram", async (req, res) => {
     const userId = message?.from?.id || callback_query?.from?.id;
     const username = message?.from?.username || callback_query?.from?.username || "User";
     const text = message?.text || "";
+    const caption = message?.caption || "";
     const callbackData = callback_query?.data;
 
-    // 1. Comando /start
+    // --- PRIORIDADE 1: COMANDOS DE TEXTO ---
     if (text && text.startsWith("/start")) {
       await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
         inline_keyboard: [
@@ -78,81 +79,81 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    // 2. Voltar para o Início
-    if (callbackData === "back") {
-      await editMessage(chatId, messageId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
-        inline_keyboard: [
-          [{ text: "VIP BR 🇧🇷", callback_data: "p_br" }],
-          [{ text: "VIP INT 🌎", callback_data: "p_int" }],
-          [{ text: "Acessar meu Privacy 🔥", url: PRIVACY_PROFILE_URL }]
-        ]
-      });
-      return;
+    if (text && text.startsWith("/aprovar")) return await handleApproval(chatId, userId, text);
+    if (text && text.startsWith("/reprovar")) return await handleRejection(chatId, userId, text);
+    if (text && text.startsWith("/remover")) return await handleRemoval(chatId, userId, text);
+
+    // --- PRIORIDADE 2: COMANDOS COM FOTO (POSTAGEM GLOBAL) ---
+    if (caption && caption.startsWith("/postar")) {
+      return await handleGlobalPost(chatId, userId, message);
     }
 
-    // 3. Escolha de Grupo
-    if (callbackData === "p_br" || callbackData === "p_int") {
-      const groupKey = callbackData.split("_")[1];
-      const config = getPlansConfig();
-      const groupConfig = config[groupKey];
-      
-      const keyboard = Object.keys(groupConfig.plans).map(key => ([{
-        text: `${groupConfig.plans[key].label} - ${groupConfig.plans[key].price_display}`,
-        callback_data: `sel_${groupKey}_${key}`
-      }]));
-      keyboard.push([{ text: "⬅️ Voltar", callback_data: "back" }]);
-      
-      await editMessage(chatId, messageId, "Escolha seu plano:", { inline_keyboard: keyboard });
-      return;
-    }
-
-    // 4. Seleção de Plano -> Método de Pagamento
-    if (callbackData && callbackData.startsWith("sel_")) {
-      const parts = callbackData.split("_");
-      const groupKey = parts[1];
-      const planShortKey = parts[2];
-      
-      await editMessage(chatId, messageId, "Escolha o método de pagamento preferido:", {
-        inline_keyboard: [
-          [{ text: "LivePix (Pix)", callback_data: `pay_${groupKey}_${planShortKey}_pix` }],
-          [{ text: "USDT (Rede Tron)", callback_data: `pay_${groupKey}_${planShortKey}_crypto` }],
-          [{ text: "⬅️ Voltar", callback_data: `p_${groupKey}` }]
-        ]
-      });
-      return;
-    }
-
-    // 5. Finalização de Escolha
-    if (callbackData && callbackData.startsWith("pay_")) {
-      const parts = callbackData.split("_");
-      const groupKey = parts[1];
-      const planShortKey = parts[2];
-      const method = parts[3];
-      
-      const config = getPlansConfig();
-      const plan = config[groupKey].plans[planShortKey];
-      const groupName = groupKey === "br" ? "VIP BR 🇧🇷" : "VIP INT 🌎";
-      const keyMap = { 'm': 'monthly', 'q': 'quarterly', 's': 'semiannual' };
-      const planKey = keyMap[planShortKey] || planShortKey;
-      
-      let instr = `📦 *Plano Selecionado:* ${groupName} - ${plan.label}\n💰 *Valor:* ${plan.price_display}\n\n`;
-      if (method === "pix") {
-        instr += `💎 *Metodo:* LivePix (Pix)\n🔗 [Clique aqui para pagar](${LIVEPIX_URL})\n\n`;
-      } else {
-        instr += `💎 *Metodo:* USDT (Rede Tron)\n🔗 *Carteira:* \`${CRIPTO_WALLET_USDT_TRON}\`\n\n`;
+    // --- PRIORIDADE 3: CALLBACKS (BOTÕES) ---
+    if (callbackData) {
+      if (callbackData === "back") {
+        await editMessage(chatId, messageId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
+          inline_keyboard: [
+            [{ text: "VIP BR 🇧🇷", callback_data: "p_br" }],
+            [{ text: "VIP INT 🌎", callback_data: "p_int" }],
+            [{ text: "Acessar meu Privacy 🔥", url: PRIVACY_PROFILE_URL }]
+          ]
+        });
+        return;
       }
-      instr += "Assim que a Manu visualizar o comprovante, ela ja libera seu acesso exclusivo!\n\n🕒 Horario de Atendimento: 09:00 as 22:00 todos os dias.\n\n*Por favor, envie o comprovante (Foto ou PDF) agora:*";
 
-      await editMessage(chatId, messageId, instr, null);
-
-      if (mongoose.connection.readyState === 1) {
-        const PendingPayment = mongoose.model("PendingPayment");
-        await PendingPayment.findByIdAndUpdate(chatId, { _id: chatId, userId, userName: username, groupKey, planKey, method, status: "awaiting_receipt" }, { upsert: true, new: true }).catch(e => console.log("Erro banco"));
+      if (callbackData === "p_br" || callbackData === "p_int") {
+        const groupKey = callbackData.split("_")[1];
+        const config = getPlansConfig();
+        const groupConfig = config[groupKey];
+        const keyboard = Object.keys(groupConfig.plans).map(key => ([{
+          text: `${groupConfig.plans[key].label} - ${groupConfig.plans[key].price_display}`,
+          callback_data: `sel_${groupKey}_${key}`
+        }]));
+        keyboard.push([{ text: "⬅️ Voltar", callback_data: "back" }]);
+        await editMessage(chatId, messageId, "Escolha seu plano:", { inline_keyboard: keyboard });
+        return;
       }
-      return;
+
+      if (callbackData.startsWith("sel_")) {
+        const parts = callbackData.split("_");
+        const groupKey = parts[1];
+        const planShortKey = parts[2];
+        await editMessage(chatId, messageId, "Escolha o método de pagamento preferido:", {
+          inline_keyboard: [
+            [{ text: "LivePix (Pix)", callback_data: `pay_${groupKey}_${planShortKey}_pix` }],
+            [{ text: "USDT (Rede Tron)", callback_data: `pay_${groupKey}_${planShortKey}_crypto` }],
+            [{ text: "⬅️ Voltar", callback_data: `p_${groupKey}` }]
+          ]
+        });
+        return;
+      }
+
+      if (callbackData.startsWith("pay_")) {
+        const parts = callbackData.split("_");
+        const groupKey = parts[1];
+        const planShortKey = parts[2];
+        const method = parts[3];
+        const config = getPlansConfig();
+        const plan = config[groupKey].plans[planShortKey];
+        const groupName = groupKey === "br" ? "VIP BR 🇧🇷" : "VIP INT 🌎";
+        const keyMap = { 'm': 'monthly', 'q': 'quarterly', 's': 'semiannual' };
+        const planKey = keyMap[planShortKey] || planShortKey;
+        
+        let instr = `📦 *Plano Selecionado:* ${groupName} - ${plan.label}\n💰 *Valor:* ${plan.price_display}\n\n`;
+        if (method === "pix") instr += `💎 *Metodo:* LivePix (Pix)\n🔗 [Clique aqui para pagar](${LIVEPIX_URL})\n\n`;
+        else instr += `💎 *Metodo:* USDT (Rede Tron)\n🔗 *Carteira:* \`${CRIPTO_WALLET_USDT_TRON}\`\n\n`;
+        instr += "Assim que a Manu visualizar o comprovante, ela ja libera seu acesso exclusivo!\n\n🕒 Horario de Atendimento: 09:00 as 22:00 todos os dias.\n\n*Por favor, envie o comprovante (Foto ou PDF) agora:*";
+
+        await editMessage(chatId, messageId, instr, null);
+        if (mongoose.connection.readyState === 1) {
+          const PendingPayment = mongoose.model("PendingPayment");
+          await PendingPayment.findByIdAndUpdate(chatId, { _id: chatId, userId, userName: username, groupKey, planKey, method, status: "awaiting_receipt" }, { upsert: true, new: true }).catch(e => console.log("Erro banco"));
+        }
+        return;
+      }
     }
 
-    // 6. Recebimento de Comprovante
+    // --- PRIORIDADE 4: RECEBIMENTO DE COMPROVANTE (APENAS SE NÃO FOR COMANDO) ---
     if (message && (message.photo || message.document)) {
       if (mongoose.connection.readyState === 1) {
         const PendingPayment = mongoose.model("PendingPayment");
@@ -171,12 +172,6 @@ app.post("/telegram", async (req, res) => {
       }
       return;
     }
-
-    // 7. Comandos Admin
-    if (text && text.startsWith("/aprovar")) await handleApproval(chatId, userId, text);
-    if (text && text.startsWith("/reprovar")) await handleRejection(chatId, userId, text);
-    if (text && text.startsWith("/remover")) await handleRemoval(chatId, userId, text);
-    if (message && message.caption && message.caption.startsWith("/postar")) await handleGlobalPost(chatId, userId, message);
 
   } catch (err) { console.error("Erro no webhook:", err.message); }
 });
@@ -208,27 +203,15 @@ async function handleApproval(adminChatId, adminUserId, text) {
 
     await sendMessage(clientId, "Pagamento aprovado! Clique no botao para entrar no grupo:", { inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] });
     
-    // Registrar no Sheets
     const activatedAt = new Date().toLocaleString("pt-BR");
     const expiresAtStr = expires.toLocaleString("pt-BR");
     const daysRemaining = plan.days;
     const method = payment.method === "pix" ? "LivePix (Pix)" : "USDT (Rede Tron)";
     
-    await appendToSheets([
-      payment.userId, 
-      payment.userName, 
-      payment.groupKey.toUpperCase(), 
-      plan.label, 
-      activatedAt, 
-      expiresAtStr, 
-      daysRemaining, 
-      "ATIVO", 
-      method
-    ], "Assinaturas");
-
+    await appendToSheets([payment.userId, payment.userName, payment.groupKey.toUpperCase(), plan.label, activatedAt, expiresAtStr, daysRemaining, "ATIVO", method], "Assinaturas");
     await PendingPayment.deleteOne({ _id: clientId });
     await sendMessage(adminChatId, `Sucesso! @${payment.userName} aprovado.`);
-  } catch (e) { await sendMessage(adminChatId, "Erro na aprovacao. Verifique permissoes."); }
+  } catch (e) { await sendMessage(adminChatId, "Erro na aprovacao."); }
 }
 
 async function handleRejection(adminChatId, adminUserId, text) {
@@ -236,14 +219,13 @@ async function handleRejection(adminChatId, adminUserId, text) {
   const parts = text.split(" ");
   if (parts.length < 2) return await sendMessage(adminChatId, "Use: /reprovar <ID> <Motivo>");
   const clientId = parts[1];
-  const reason = parts.slice(2).join(" ") || "Comprovante invalido ou pagamento nao recebido.";
+  const reason = parts.slice(2).join(" ") || "Comprovante invalido.";
 
   try {
     const PendingPayment = mongoose.model("PendingPayment");
     const payment = await PendingPayment.findById(clientId);
     if (!payment) return await sendMessage(adminChatId, "ID nao encontrado.");
-
-    await sendMessage(clientId, `❌ *Pagamento Reprovado*\n\nMotivo: ${reason}\n\nPor favor, envie o comprovante correto ou entre em contato.`);
+    await sendMessage(clientId, `❌ *Pagamento Reprovado*\n\nMotivo: ${reason}`);
     await sendMessage(adminChatId, `Sucesso! @${payment.userName} reprovado.`);
   } catch (e) { await sendMessage(adminChatId, "Erro ao reprovar."); }
 }
@@ -258,37 +240,24 @@ async function handleRemoval(adminChatId, adminUserId, text) {
     const Subscription = mongoose.model("Subscription");
     const sub = await Subscription.findById(clientId);
     if (!sub) return await sendMessage(adminChatId, "Assinatura nao encontrada.");
-
     const config = getPlansConfig();
     const groupId = config[sub.groupKey]?.group_id;
-
-    // Remover do grupo Telegram
-    await axios.post(`${TELEGRAM_API}/banChatMember`, { chat_id: groupId, user_id: clientId }).catch(e => console.log("Erro ban"));
-    await axios.post(`${TELEGRAM_API}/unbanChatMember`, { chat_id: groupId, user_id: clientId, only_if_banned: true }).catch(e => console.log("Erro unban"));
-
-    // Registrar na aba Removidos
+    await axios.post(`${TELEGRAM_API}/banChatMember`, { chat_id: groupId, user_id: clientId }).catch(e => {});
+    await axios.post(`${TELEGRAM_API}/unbanChatMember`, { chat_id: groupId, user_id: clientId, only_if_banned: true }).catch(e => {});
     const removalDate = new Date().toLocaleString("pt-BR");
     await appendToSheets([clientId, sub.groupKey.toUpperCase(), removalDate], "Removidos");
-
-    // Atualizar status no banco
     await Subscription.findByIdAndUpdate(clientId, { status: "expired" });
-
-    await sendMessage(clientId, "Sua assinatura expirou ou foi encerrada. Caso queira renovar, use /start.");
-    await sendMessage(adminChatId, `Sucesso! Usuário ${clientId} removido e registrado na planilha.`);
-  } catch (e) { await sendMessage(adminChatId, "Erro ao remover usuário."); }
+    await sendMessage(clientId, "Sua assinatura expirou. Use /start para renovar.");
+    await sendMessage(adminChatId, `Sucesso! Usuário ${clientId} removido.`);
+  } catch (e) { await sendMessage(adminChatId, "Erro ao remover."); }
 }
 
 async function handleGlobalPost(adminChatId, adminUserId, message) {
   if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
   
-  if (!message.photo) {
-    return await sendMessage(adminChatId, "Para postar, envie uma FOTO com a legenda:\n\n`/postar` \n`PT: Seu texto em português` \n`EN: Your text in English`.");
-  }
-
   const fullCaption = message.caption || "";
   const photoId = message.photo[message.photo.length - 1].file_id;
 
-  // Extrair textos usando prefixos PT: e EN:
   let ptText = "";
   let enText = "";
 
@@ -298,7 +267,6 @@ async function handleGlobalPost(adminChatId, adminUserId, message) {
   if (ptMatch) ptText = ptMatch[1].trim();
   if (enMatch) enText = enMatch[1].trim();
 
-  // Se não encontrar prefixos, tenta pegar o texto após o comando como padrão para ambos
   if (!ptText && !enText) {
     const fallbackText = fullCaption.replace("/postar", "").trim();
     ptText = fallbackText;
@@ -306,55 +274,27 @@ async function handleGlobalPost(adminChatId, adminUserId, message) {
   }
 
   try {
-    const config = getPlansConfig();
-    
-    // Postar no BR
     if (VIP_BR_GROUP_ID && ptText) {
-      await axios.post(`${TELEGRAM_API}/sendPhoto`, {
-        chat_id: VIP_BR_GROUP_ID,
-        photo: photoId,
-        caption: ptText,
-        parse_mode: "Markdown"
-      });
+      await axios.post(`${TELEGRAM_API}/sendPhoto`, { chat_id: VIP_BR_GROUP_ID, photo: photoId, caption: ptText, parse_mode: "Markdown" });
     }
-
-    // Postar no INT
     if (VIP_INT_GROUP_ID && enText) {
-      await axios.post(`${TELEGRAM_API}/sendPhoto`, {
-        chat_id: VIP_INT_GROUP_ID,
-        photo: photoId,
-        caption: enText,
-        parse_mode: "Markdown"
-      });
+      await axios.post(`${TELEGRAM_API}/sendPhoto`, { chat_id: VIP_INT_GROUP_ID, photo: photoId, caption: enText, parse_mode: "Markdown" });
     }
-
     await sendMessage(adminChatId, `✅ Postagem bilíngue realizada com sucesso!`);
   } catch (e) {
-    console.error("Erro na postagem global:", e.message);
-    await sendMessage(adminChatId, "❌ Erro ao realizar a postagem. Verifique se o bot é admin nos grupos.");
+    await sendMessage(adminChatId, "❌ Erro ao realizar a postagem.");
   }
 }
 
 // --- GOOGLE SHEETS --- //
 
 async function appendToSheets(rowData, sheetName = "Assinaturas") {
-  if (!GOOGLE_SHEETS_ID || !googleAuthData.email || !googleAuthData.key) {
-    console.log("Configuração de Sheets incompleta.");
-    return;
-  }
+  if (!GOOGLE_SHEETS_ID || !googleAuthData.email || !googleAuthData.key) return;
   try {
     const auth = new google.auth.JWT(googleAuthData.email, null, googleAuthData.key, ["https://www.googleapis.com/auth/spreadsheets"]);
     const sheets = google.sheets({ version: "v4", auth });
-    
     const range = sheetName === "Assinaturas" ? "Assinaturas!A:I" : "Removidos!A:C";
-    
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: GOOGLE_SHEETS_ID,
-      range: range,
-      valueInputOption: "USER_ENTERED",
-      resource: { values: [rowData] }
-    });
-    console.log(`Sheets (${sheetName}) atualizado!`);
+    await sheets.spreadsheets.values.append({ spreadsheetId: GOOGLE_SHEETS_ID, range: range, valueInputOption: "USER_ENTERED", resource: { values: [rowData] } });
   } catch (e) { console.error(`Erro Sheets (${sheetName}):`, e.message); }
 }
 
