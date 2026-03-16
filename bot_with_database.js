@@ -176,6 +176,7 @@ app.post("/telegram", async (req, res) => {
     if (text && text.startsWith("/aprovar")) await handleApproval(chatId, userId, text);
     if (text && text.startsWith("/reprovar")) await handleRejection(chatId, userId, text);
     if (text && text.startsWith("/remover")) await handleRemoval(chatId, userId, text);
+    if (message && message.caption && message.caption.startsWith("/postar")) await handleGlobalPost(chatId, userId, message);
 
   } catch (err) { console.error("Erro no webhook:", err.message); }
 });
@@ -208,7 +209,6 @@ async function handleApproval(adminChatId, adminUserId, text) {
     await sendMessage(clientId, "Pagamento aprovado! Clique no botao para entrar no grupo:", { inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] });
     
     // Registrar no Sheets
-    // Colunas: ID do Usuário, Nome, Grupo, Plano, Ativada em, Expira em, Dias Restantes, Status, Método de Pagamento
     const activatedAt = new Date().toLocaleString("pt-BR");
     const expiresAtStr = expires.toLocaleString("pt-BR");
     const daysRemaining = plan.days;
@@ -270,12 +270,69 @@ async function handleRemoval(adminChatId, adminUserId, text) {
     const removalDate = new Date().toLocaleString("pt-BR");
     await appendToSheets([clientId, sub.groupKey.toUpperCase(), removalDate], "Removidos");
 
-    // Atualizar status no banco ou deletar
+    // Atualizar status no banco
     await Subscription.findByIdAndUpdate(clientId, { status: "expired" });
 
     await sendMessage(clientId, "Sua assinatura expirou ou foi encerrada. Caso queira renovar, use /start.");
     await sendMessage(adminChatId, `Sucesso! Usuário ${clientId} removido e registrado na planilha.`);
   } catch (e) { await sendMessage(adminChatId, "Erro ao remover usuário."); }
+}
+
+async function handleGlobalPost(adminChatId, adminUserId, message) {
+  if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
+  
+  if (!message.photo) {
+    return await sendMessage(adminChatId, "Para postar, envie uma FOTO com a legenda:\n\n`/postar` \n`PT: Seu texto em português` \n`EN: Your text in English`.");
+  }
+
+  const fullCaption = message.caption || "";
+  const photoId = message.photo[message.photo.length - 1].file_id;
+
+  // Extrair textos usando prefixos PT: e EN:
+  let ptText = "";
+  let enText = "";
+
+  const ptMatch = fullCaption.match(/PT:\s*([\s\S]*?)(?=EN:|$)/i);
+  const enMatch = fullCaption.match(/EN:\s*([\s\S]*?)(?=PT:|$)/i);
+
+  if (ptMatch) ptText = ptMatch[1].trim();
+  if (enMatch) enText = enMatch[1].trim();
+
+  // Se não encontrar prefixos, tenta pegar o texto após o comando como padrão para ambos
+  if (!ptText && !enText) {
+    const fallbackText = fullCaption.replace("/postar", "").trim();
+    ptText = fallbackText;
+    enText = fallbackText;
+  }
+
+  try {
+    const config = getPlansConfig();
+    
+    // Postar no BR
+    if (VIP_BR_GROUP_ID && ptText) {
+      await axios.post(`${TELEGRAM_API}/sendPhoto`, {
+        chat_id: VIP_BR_GROUP_ID,
+        photo: photoId,
+        caption: ptText,
+        parse_mode: "Markdown"
+      });
+    }
+
+    // Postar no INT
+    if (VIP_INT_GROUP_ID && enText) {
+      await axios.post(`${TELEGRAM_API}/sendPhoto`, {
+        chat_id: VIP_INT_GROUP_ID,
+        photo: photoId,
+        caption: enText,
+        parse_mode: "Markdown"
+      });
+    }
+
+    await sendMessage(adminChatId, `✅ Postagem bilíngue realizada com sucesso!`);
+  } catch (e) {
+    console.error("Erro na postagem global:", e.message);
+    await sendMessage(adminChatId, "❌ Erro ao realizar a postagem. Verifique se o bot é admin nos grupos.");
+  }
 }
 
 // --- GOOGLE SHEETS --- //
@@ -289,7 +346,6 @@ async function appendToSheets(rowData, sheetName = "Assinaturas") {
     const auth = new google.auth.JWT(googleAuthData.email, null, googleAuthData.key, ["https://www.googleapis.com/auth/spreadsheets"]);
     const sheets = google.sheets({ version: "v4", auth });
     
-    // Define o range com base na aba (Assinaturas tem 9 colunas, Removidos tem 3)
     const range = sheetName === "Assinaturas" ? "Assinaturas!A:I" : "Removidos!A:C";
     
     await sheets.spreadsheets.values.append({
