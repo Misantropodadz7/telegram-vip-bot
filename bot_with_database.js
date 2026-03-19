@@ -1,17 +1,19 @@
-const express = require("express");
+    const express = require("express");
 const bodyParser = require("body-parser");
 const axios = require("axios");
 const mongoose = require("mongoose");
 const { google } = require("googleapis");
+const crypto = require("crypto");
+
+// Importar SDK do Mercado Pago
+const { MercadoPagoConfig, Preference, Payment } = require("mercadopago");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// TELEGRAM
+// ===== CONFIGURAÇÕES TELEGRAM =====
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-
-// VARIÁVEIS DE AMBIENTE
 const OWNER_TELEGRAM_ID = process.env.OWNER_TELEGRAM_ID?.trim() || "";
 const WEBHOOK_BASE_URL = process.env.WEBHOOK_BASE_URL?.trim() || "";
 const MONGODB_URI = process.env.MONGODB_URI?.trim() || "";
@@ -19,11 +21,14 @@ const PRIVACY_PROFILE_URL = process.env.PRIVACY_PROFILE_URL?.trim() || "https://
 const VIP_BR_GROUP_ID = process.env.GROUP_ID_BR?.trim() || "";
 const VIP_INT_GROUP_ID = process.env.GROUP_ID_INT?.trim() || "";
 
-// PAGAMENTO
-const LIVEPIX_URL = process.env.LIVEPIX_URL?.trim() || "Chave Pix não configurada";
-const CRIPTO_WALLET_USDT_TRON = "TRcZMiKsHDWnjTPpDpTzX9iC9y2Rd12u2b"; // Carteira USDT (Tron)
+// ===== CONFIGURAÇÕES MERCADO PAGO =====
+const MP_ACCESS_TOKEN = process.env.MERCADO_PAGO_ACCESS_TOKEN?.trim() || "";
+const MP_WEBHOOK_SECRET = process.env.MERCADO_PAGO_WEBHOOK_SECRET?.trim() || "";
 
-// GOOGLE SHEETS (SUPORTE A JSON)
+// Inicializar Mercado Pago
+const mpClient = new MercadoPagoConfig({ accessToken: MP_ACCESS_TOKEN });
+
+// ===== CONFIGURAÇÕES GOOGLE SHEETS =====
 const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID?.trim() || "";
 const GOOGLE_CREDENTIALS_JSON = process.env.GOOGLE_CREDENTIALS_JSON;
 
@@ -32,28 +37,28 @@ let googleAuthData = {
   key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n").trim() || ""
 };
 
-// Se o JSON estiver presente, extrai os dados dele
 if (GOOGLE_CREDENTIALS_JSON) {
   try {
     const creds = JSON.parse(GOOGLE_CREDENTIALS_JSON);
     googleAuthData.email = creds.client_email;
     googleAuthData.key = creds.private_key.replace(/\\n/g, "\n");
-    console.log("Credenciais do Google carregadas via JSON com sucesso!");
+    console.log("✅ Credenciais do Google carregadas com sucesso!");
   } catch (e) {
-    console.error("Erro ao processar GOOGLE_CREDENTIALS_JSON:", e.message);
+    console.error("❌ Erro ao processar GOOGLE_CREDENTIALS_JSON:", e.message);
   }
 }
 
-// MIDDLEWARES
+// ===== MIDDLEWARES =====
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// ROTA DE TESTE
+// ===== ROTAS =====
+
 app.get("/", (req, res) => {
-  res.send(`<h1>Bot VIP Ativo!</h1><p>Status: Suporte a Credenciais JSON habilitado.</p>`);
+  res.send(`<h1>✅ Bot VIP Ativo!</h1><p>Integração com Mercado Pago habilitada.</p>`);
 });
 
-// TELEGRAM WEBHOOK
+// ===== WEBHOOK DO TELEGRAM =====
 app.post("/telegram", async (req, res) => {
   const { message, callback_query } = req.body;
   res.sendStatus(200);
@@ -64,12 +69,11 @@ app.post("/telegram", async (req, res) => {
     const userId = message?.from?.id || callback_query?.from?.id;
     const username = message?.from?.username || callback_query?.from?.username || "User";
     const text = message?.text || "";
-    const caption = message?.caption || "";
     const callbackData = callback_query?.data;
 
-    // --- PRIORIDADE 1: COMANDOS DE TEXTO ---
+    // --- COMANDO /start ---
     if (text && text.startsWith("/start")) {
-      await sendMessage(chatId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
+      await sendMessage(chatId, "👋 Bem-vindo! Escolha seu grupo VIP:", {
         inline_keyboard: [
           [{ text: "VIP BR 🇧🇷", callback_data: "p_br" }],
           [{ text: "VIP INT 🌎", callback_data: "p_int" }],
@@ -79,19 +83,10 @@ app.post("/telegram", async (req, res) => {
       return;
     }
 
-    if (text && text.startsWith("/aprovar")) return await handleApproval(chatId, userId, text);
-    if (text && text.startsWith("/reprovar")) return await handleRejection(chatId, userId, text);
-    if (text && text.startsWith("/remover")) return await handleRemoval(chatId, userId, text);
-
-    // --- PRIORIDADE 2: COMANDOS COM FOTO (POSTAGEM GLOBAL) ---
-    if (caption && caption.startsWith("/postar")) {
-      return await handleGlobalPost(chatId, userId, message);
-    }
-
-    // --- PRIORIDADE 3: CALLBACKS (BOTÕES) ---
+    // --- CALLBACKS (BOTÕES) ---
     if (callbackData) {
       if (callbackData === "back") {
-        await editMessage(chatId, messageId, "Escolha seu grupo VIP ou acesse meu perfil no Privacy:", {
+        await editMessage(chatId, messageId, "👋 Escolha seu grupo VIP:", {
           inline_keyboard: [
             [{ text: "VIP BR 🇧🇷", callback_data: "p_br" }],
             [{ text: "VIP INT 🌎", callback_data: "p_int" }],
@@ -101,6 +96,7 @@ app.post("/telegram", async (req, res) => {
         return;
       }
 
+      // Selecionar grupo
       if (callbackData === "p_br" || callbackData === "p_int") {
         const groupKey = callbackData.split("_")[1];
         const config = getPlansConfig();
@@ -110,207 +106,290 @@ app.post("/telegram", async (req, res) => {
           callback_data: `sel_${groupKey}_${key}`
         }]));
         keyboard.push([{ text: "⬅️ Voltar", callback_data: "back" }]);
-        await editMessage(chatId, messageId, "Escolha seu plano:", { inline_keyboard: keyboard });
+        await editMessage(chatId, messageId, "📦 Escolha seu plano:", { inline_keyboard: keyboard });
         return;
       }
 
+      // Selecionar plano e gerar link de pagamento
       if (callbackData.startsWith("sel_")) {
         const parts = callbackData.split("_");
         const groupKey = parts[1];
         const planShortKey = parts[2];
-        await editMessage(chatId, messageId, "Escolha o método de pagamento preferido:", {
-          inline_keyboard: [
-            [{ text: "LivePix (Pix)", callback_data: `pay_${groupKey}_${planShortKey}_pix` }],
-            [{ text: "USDT (Rede Tron)", callback_data: `pay_${groupKey}_${planShortKey}_crypto` }],
-            [{ text: "⬅️ Voltar", callback_data: `p_${groupKey}` }]
-          ]
-        });
-        return;
-      }
-
-      if (callbackData.startsWith("pay_")) {
-        const parts = callbackData.split("_");
-        const groupKey = parts[1];
-        const planShortKey = parts[2];
-        const method = parts[3];
         const config = getPlansConfig();
-        const plan = config[groupKey].plans[planShortKey];
+        const plan = config[groupKey]?.plans[planShortKey];
         const groupName = groupKey === "br" ? "VIP BR 🇧🇷" : "VIP INT 🌎";
-        const keyMap = { 'm': 'monthly', 'q': 'quarterly', 's': 'semiannual' };
-        const planKey = keyMap[planShortKey] || planShortKey;
-        
-        let instr = `📦 *Plano Selecionado:* ${groupName} - ${plan.label}\n💰 *Valor:* ${plan.price_display}\n\n`;
-        if (method === "pix") instr += `💎 *Metodo:* LivePix (Pix)\n🔗 [Clique aqui para pagar](${LIVEPIX_URL})\n\n`;
-        else instr += `💎 *Metodo:* USDT (Rede Tron)\n🔗 *Carteira:* \`${CRIPTO_WALLET_USDT_TRON}\`\n\n`;
-        instr += "Assim que a Manu visualizar o comprovante, ela ja libera seu acesso exclusivo!\n\n🕒 Horario de Atendimento: 09:00 as 22:00 todos os dias.\n\n*Por favor, envie o comprovante (Foto ou PDF) agora:*";
 
-        await editMessage(chatId, messageId, instr, null);
-        if (mongoose.connection.readyState === 1) {
-          const PendingPayment = mongoose.model("PendingPayment");
-          await PendingPayment.findByIdAndUpdate(chatId, { _id: chatId, userId, userName: username, groupKey, planKey, method, status: "awaiting_receipt" }, { upsert: true, new: true }).catch(e => console.log("Erro banco"));
+        if (!plan) {
+          await editMessage(chatId, messageId, "❌ Plano não encontrado.", null);
+          return;
+        }
+
+        // Gerar link de pagamento do Mercado Pago
+        const paymentLink = await createMercadoPagoPayment(
+          chatId,
+          userId,
+          username,
+          groupKey,
+          planShortKey,
+          plan
+        );
+
+        if (paymentLink) {
+          const instr = `📦 *Plano Selecionado:* ${groupName} - ${plan.label}\n💰 *Valor:* ${plan.price_display}\n\n🔗 [Clique aqui para pagar](${paymentLink})`;
+          await editMessage(chatId, messageId, instr, null);
+        } else {
+          await editMessage(chatId, messageId, "❌ Erro ao gerar link de pagamento. Tente novamente.", null);
         }
         return;
       }
     }
 
-    // --- PRIORIDADE 4: RECEBIMENTO DE COMPROVANTE (APENAS SE NÃO FOR COMANDO) ---
-    if (message && (message.photo || message.document)) {
-      if (mongoose.connection.readyState === 1) {
-        const PendingPayment = mongoose.model("PendingPayment");
-        const payment = await PendingPayment.findById(chatId);
-        if (payment && payment.status === "awaiting_receipt") {
-          await sendMessage(chatId, "Comprovante recebido com sucesso! Agora e so aguardar a Manu dar aquela conferida e seu link chegara aqui. Fique tranquilo(a), ela faz as liberacoes todos os dias das 09:00 as 22:00.");
-          if (OWNER_TELEGRAM_ID) {
-            const config = getPlansConfig();
-            const plan = config[payment.groupKey]?.plans[payment.planKey === 'monthly' ? 'm' : payment.planKey === 'quarterly' ? 'q' : 's'];
-            const groupName = payment.groupKey === "br" ? "VIP BR 🇧🇷" : "VIP INT 🌎";
-            let adminMsg = `🔔 *NOVO COMPROVANTE*\n👤 @${username}\n🆔 \`${chatId}\`\n📦 ${groupName} - ${plan?.label}\n💰 ${plan?.price_display}\n\n/aprovar ${chatId}\n/reprovar ${chatId} <motivo>`;
-            await sendMessage(OWNER_TELEGRAM_ID, adminMsg);
-            await axios.post(`${TELEGRAM_API}/forwardMessage`, { chat_id: OWNER_TELEGRAM_ID, from_chat_id: chatId, message_id: message.message_id }).catch(e => console.log("Erro forward"));
-          }
-        }
-      }
+  } catch (err) {
+    console.error("❌ Erro no webhook do Telegram:", err.message);
+  }
+});
+
+// ===== WEBHOOK DO MERCADO PAGO =====
+app.post("/webhook/mercadopago", async (req, res) => {
+  res.sendStatus(200); // Responder imediatamente
+
+  try {
+    const { data, type } = req.body;
+
+    console.log("📨 Webhook recebido do Mercado Pago:", { type, dataId: data?.id });
+
+    // Validar assinatura do webhook
+    if (!validateMercadoPagoSignature(req)) {
+      console.log("⚠️ Assinatura do Mercado Pago inválida");
       return;
     }
 
-  } catch (err) { console.error("Erro no webhook:", err.message); }
+    // Processar apenas notificações de pagamento
+    if (type === "payment" && data?.id) {
+      const paymentId = data.id;
+
+      // Obter detalhes do pagamento
+      const payment = new Payment(mpClient);
+      const paymentData = await payment.get({ id: paymentId });
+
+      console.log("💳 Detalhes do pagamento:", { id: paymentId, status: paymentData.status });
+
+      // Verificar se o pagamento foi aprovado
+      if (paymentData.status === "approved") {
+        // Extrair dados do pagamento
+        const externalReference = paymentData.external_reference; // "chatId_userId_groupKey_planKey"
+        const [chatId, userId, groupKey, planKey] = externalReference.split("_");
+
+        console.log("✅ Pagamento aprovado! Liberando acesso...", { chatId, userId, groupKey, planKey });
+
+        // Liberar acesso automaticamente
+        await liberarAcessoAutomatico(chatId, userId, groupKey, planKey);
+      }
+    }
+  } catch (err) {
+    console.error("❌ Erro no webhook do Mercado Pago:", err.message);
+  }
 });
 
-// --- FUNÇÕES ADMIN --- //
+// ===== FUNÇÕES DO MERCADO PAGO =====
 
-async function handleApproval(adminChatId, adminUserId, text) {
-  if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
-  const parts = text.split(" ");
-  if (parts.length < 2) return await sendMessage(adminChatId, "Use: /aprovar <ID>");
-  const clientId = parts[1];
-  if (mongoose.connection.readyState !== 1) return await sendMessage(adminChatId, "Banco offline.");
-
+async function createMercadoPagoPayment(chatId, userId, username, groupKey, planShortKey, plan) {
   try {
-    const PendingPayment = mongoose.model("PendingPayment");
-    const Subscription = mongoose.model("Subscription");
-    const payment = await PendingPayment.findById(clientId);
-    if (!payment) return await sendMessage(adminChatId, "ID nao encontrado.");
+    const preference = new Preference(mpClient);
+
+    // Mapa de moedas
+    const currencyMap = {
+      br: "BRL",
+      int: "USD"
+    };
+
+    // Extrair valor numérico (ex: "R$ 29,90" → 29.90)
+    const priceValue = parseFloat(plan.price_display.replace(/[^\d,.-]/g, "").replace(",", "."));
+
+    const body = {
+      items: [
+        {
+          id: `${groupKey}_${planShortKey}`,
+          title: `${groupKey === "br" ? "VIP BR" : "VIP INT"} - ${plan.label}`,
+          description: `Acesso por ${plan.days} dias`,
+          picture_url: "https://via.placeholder.com/150",
+          category_id: "services",
+          quantity: 1,
+          currency_id: currencyMap[groupKey],
+          unit_price: priceValue
+        }
+      ],
+      payer: {
+        email: `user_${userId}@telegram.local`,
+        name: username
+      },
+      external_reference: `${chatId}_${userId}_${groupKey}_${planShortKey}`,
+      back_urls: {
+        success: `${WEBHOOK_BASE_URL}/success`,
+        failure: `${WEBHOOK_BASE_URL}/failure`,
+        pending: `${WEBHOOK_BASE_URL}/pending`
+      },
+      auto_return: "approved",
+      notification_url: `${WEBHOOK_BASE_URL}/webhook/mercadopago`
+    };
+
+    const response = await preference.create({ body });
+    console.log("✅ Link de pagamento gerado:", response.init_point);
+    return response.init_point; // Link de pagamento
+  } catch (err) {
+    console.error("❌ Erro ao criar pagamento:", err.message);
+    return null;
+  }
+}
+
+function validateMercadoPagoSignature(req) {
+  try {
+    const xSignature = req.headers["x-signature"];
+    const xRequestId = req.headers["x-request-id"];
+
+    if (!xSignature || !xRequestId) {
+      console.log("⚠️ Headers de assinatura ausentes");
+      return false;
+    }
+
+    const parts = xSignature.split(",");
+    let ts = null;
+    let hash = null;
+
+    for (const part of parts) {
+      const [key, value] = part.split("=");
+      if (key === "ts") ts = value;
+      if (key === "v1") hash = value;
+    }
+
+    if (!ts || !hash) {
+      console.log("⚠️ Timestamp ou hash ausentes");
+      return false;
+    }
+
+    // Construir manifest
+    const dataId = req.body.data?.id || "";
+    const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
+
+    // Gerar HMAC
+    const sha = crypto.createHmac("sha256", MP_WEBHOOK_SECRET).update(manifest).digest("hex");
+
+    const isValid = sha === hash;
+    console.log(`🔐 Validação de assinatura: ${isValid ? "✅ OK" : "❌ FALHOU"}`);
+    return isValid;
+  } catch (err) {
+    console.error("❌ Erro ao validar assinatura:", err.message);
+    return false;
+  }
+}
+
+async function liberarAcessoAutomatico(chatId, userId, groupKey, planKey) {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      console.log("⚠️ MongoDB offline");
+      return;
+    }
 
     const config = getPlansConfig();
-    const plan = config[payment.groupKey]?.plans[payment.planKey === 'monthly' ? 'm' : payment.planKey === 'quarterly' ? 'q' : 's'];
-    const groupId = config[payment.groupKey]?.group_id;
+    const plan = config[groupKey]?.plans[planKey === 'monthly' ? 'm' : planKey === 'quarterly' ? 'q' : 's'];
+    const groupId = config[groupKey]?.group_id;
 
-    const r = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, { chat_id: groupId, member_limit: 1, expire_date: Math.floor(Date.now() / 1000) + 1800 });
-    const invite = r.data.result.invite_link;
+    if (!plan || !groupId) {
+      console.log("⚠️ Plano ou grupo não encontrado");
+      return;
+    }
 
-    const expires = new Date(Date.now() + plan.days * 86400000);
-    await Subscription.findByIdAndUpdate(payment.userId, { _id: payment.userId, userId: payment.userId, chatId: clientId, groupKey: payment.groupKey, planKey: payment.planKey, expiresAt: expires, status: "active" }, { upsert: true });
+    // Criar link de convite único
+    const inviteResponse = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
+      chat_id: groupId,
+      member_limit: 1,
+      expire_date: Math.floor(Date.now() / 1000) + 1800 // Expira em 30 minutos
+    });
 
-    await sendMessage(clientId, "Pagamento aprovado! Clique no botao para entrar no grupo:", { inline_keyboard: [[{ text: "Entrar no grupo", url: invite }]] });
-    
+    const inviteLink = inviteResponse.data.result.invite_link;
+
+    // Salvar assinatura no MongoDB
+    const Subscription = mongoose.model("Subscription");
+    const expiresAt = new Date(Date.now() + plan.days * 86400000);
+
+    await Subscription.findByIdAndUpdate(
+      userId,
+      {
+        _id: userId,
+        userId: userId,
+        chatId: chatId,
+        groupKey: groupKey,
+        planKey: planKey,
+        expiresAt: expiresAt,
+        status: "active"
+      },
+      { upsert: true }
+    );
+
+    // Enviar link para o usuário
+    await sendMessage(
+      chatId,
+      `✅ *Acesso Liberado!*\n\nClique no botão abaixo para entrar:`,
+      {
+        inline_keyboard: [[{ text: "Entrar no Grupo", url: inviteLink }]]
+      }
+    );
+
+    // Salvar na planilha Google Sheets
     const activatedAt = new Date().toLocaleString("pt-BR");
-    const expiresAtStr = expires.toLocaleString("pt-BR");
+    const expiresAtStr = expiresAt.toLocaleString("pt-BR");
     const daysRemaining = plan.days;
-    const method = payment.method === "pix" ? "LivePix (Pix)" : "USDT (Rede Tron)";
-    
-    await appendToSheets([payment.userId, payment.userName, payment.groupKey.toUpperCase(), plan.label, activatedAt, expiresAtStr, daysRemaining, "ATIVO", method], "Assinaturas");
-    await PendingPayment.deleteOne({ _id: clientId });
-    await sendMessage(adminChatId, `Sucesso! @${payment.userName} aprovado.`);
-  } catch (e) { await sendMessage(adminChatId, "Erro na aprovacao."); }
-}
 
-async function handleRejection(adminChatId, adminUserId, text) {
-  if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
-  const parts = text.split(" ");
-  if (parts.length < 2) return await sendMessage(adminChatId, "Use: /reprovar <ID> <Motivo>");
-  const clientId = parts[1];
-  const reason = parts.slice(2).join(" ") || "Comprovante invalido.";
+    await appendToSheets(
+      [userId, "User_" + userId, groupKey.toUpperCase(), plan.label, activatedAt, expiresAtStr, daysRemaining, "ATIVO", "Mercado Pago"],
+      "Assinaturas"
+    );
 
-  try {
-    const PendingPayment = mongoose.model("PendingPayment");
-    const payment = await PendingPayment.findById(clientId);
-    if (!payment) return await sendMessage(adminChatId, "ID nao encontrado.");
-    await sendMessage(clientId, `❌ *Pagamento Reprovado*\n\nMotivo: ${reason}`);
-    await sendMessage(adminChatId, `Sucesso! @${payment.userName} reprovado.`);
-  } catch (e) { await sendMessage(adminChatId, "Erro ao reprovar."); }
-}
+    console.log(`✅ Acesso liberado para usuário ${userId}`);
 
-async function handleRemoval(adminChatId, adminUserId, text) {
-  if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
-  const parts = text.split(" ");
-  if (parts.length < 2) return await sendMessage(adminChatId, "Use: /remover <ID>");
-  const clientId = parts[1];
-
-  try {
-    const Subscription = mongoose.model("Subscription");
-    const sub = await Subscription.findById(clientId);
-    if (!sub) return await sendMessage(adminChatId, "Assinatura nao encontrada.");
-    const config = getPlansConfig();
-    const groupId = config[sub.groupKey]?.group_id;
-    await axios.post(`${TELEGRAM_API}/banChatMember`, { chat_id: groupId, user_id: clientId }).catch(e => {});
-    await axios.post(`${TELEGRAM_API}/unbanChatMember`, { chat_id: groupId, user_id: clientId, only_if_banned: true }).catch(e => {});
-    const removalDate = new Date().toLocaleString("pt-BR");
-    await appendToSheets([clientId, sub.groupKey.toUpperCase(), removalDate], "Removidos");
-    await Subscription.findByIdAndUpdate(clientId, { status: "expired" });
-    await sendMessage(clientId, "Sua assinatura expirou. Use /start para renovar.");
-    await sendMessage(adminChatId, `Sucesso! Usuário ${clientId} removido.`);
-  } catch (e) { await sendMessage(adminChatId, "Erro ao remover."); }
-}
-
-async function handleGlobalPost(adminChatId, adminUserId, message) {
-  if (adminUserId.toString() !== OWNER_TELEGRAM_ID) return;
-  
-  const fullCaption = message.caption || "";
-  const photoId = message.photo[message.photo.length - 1].file_id;
-
-  let ptText = "";
-  let enText = "";
-
-  const ptMatch = fullCaption.match(/PT:\s*([\s\S]*?)(?=EN:|$)/i);
-  const enMatch = fullCaption.match(/EN:\s*([\s\S]*?)(?=PT:|$)/i);
-
-  if (ptMatch) ptText = ptMatch[1].trim();
-  if (enMatch) enText = enMatch[1].trim();
-
-  if (!ptText && !enText) {
-    const fallbackText = fullCaption.replace("/postar", "").trim();
-    ptText = fallbackText;
-    enText = fallbackText;
-  }
-
-  try {
-    if (VIP_BR_GROUP_ID && ptText) {
-      await axios.post(`${TELEGRAM_API}/sendPhoto`, { chat_id: VIP_BR_GROUP_ID, photo: photoId, caption: ptText, parse_mode: "Markdown" });
+    // Notificar admin (opcional)
+    if (OWNER_TELEGRAM_ID) {
+      await sendMessage(
+        OWNER_TELEGRAM_ID,
+        `✅ *PAGAMENTO CONFIRMADO*\n👤 User ${userId}\n📦 ${groupKey.toUpperCase()} - ${plan.label}\n💰 ${plan.price_display}\n\n✨ Acesso liberado automaticamente!`
+      );
     }
-    if (VIP_INT_GROUP_ID && enText) {
-      await axios.post(`${TELEGRAM_API}/sendPhoto`, { chat_id: VIP_INT_GROUP_ID, photo: photoId, caption: enText, parse_mode: "Markdown" });
-    }
-    await sendMessage(adminChatId, `✅ Postagem bilíngue realizada com sucesso!`);
-  } catch (e) {
-    await sendMessage(adminChatId, "❌ Erro ao realizar a postagem.");
+  } catch (err) {
+    console.error("❌ Erro ao liberar acesso:", err.message);
   }
 }
 
-// --- GOOGLE SHEETS --- //
-
-async function appendToSheets(rowData, sheetName = "Assinaturas") {
-  if (!GOOGLE_SHEETS_ID || !googleAuthData.email || !googleAuthData.key) return;
-  try {
-    const auth = new google.auth.JWT(googleAuthData.email, null, googleAuthData.key, ["https://www.googleapis.com/auth/spreadsheets"]);
-    const sheets = google.sheets({ version: "v4", auth });
-    const range = sheetName === "Assinaturas" ? "Assinaturas!A:I" : "Removidos!A:C";
-    await sheets.spreadsheets.values.append({ spreadsheetId: GOOGLE_SHEETS_ID, range: range, valueInputOption: "USER_ENTERED", resource: { values: [rowData] } });
-  } catch (e) { console.error(`Erro Sheets (${sheetName}):`, e.message); }
-}
+// ===== FUNÇÕES AUXILIARES =====
 
 function getPlansConfig() {
   return {
-    br: { group_id: VIP_BR_GROUP_ID, plans: { m: { label: "Mensal", price_display: "R$ 29,90", days: 30 }, q: { label: "Trimestral", price_display: "R$ 76,24", days: 90 }, s: { label: "Semestral", price_display: "R$ 134,55", days: 180 } } },
-    int: { group_id: VIP_INT_GROUP_ID, plans: { m: { label: "Monthly", price_display: "$11", days: 30 }, q: { label: "Quarterly", price_display: "$28", days: 90 }, s: { label: "Semiannual", price_display: "$49", days: 180 } } }
+    br: {
+      group_id: VIP_BR_GROUP_ID,
+      plans: {
+        m: { label: "Mensal", price_display: "R$ 29,90", days: 30 },
+        q: { label: "Trimestral", price_display: "R$ 76,24", days: 90 },
+        s: { label: "Semestral", price_display: "R$ 134,55", days: 180 }
+      }
+    },
+    int: {
+      group_id: VIP_INT_GROUP_ID,
+      plans: {
+        m: { label: "Monthly", price_display: "$11", days: 30 },
+        q: { label: "Quarterly", price_display: "$28", days: 90 },
+        s: { label: "Semiannual", price_display: "$49", days: 180 }
+      }
+    }
   };
 }
 
 async function sendMessage(chatId, text, reply_markup = null) {
-  try { 
+  try {
     const payload = { chat_id: chatId, text: text, parse_mode: "Markdown" };
     if (reply_markup) payload.reply_markup = reply_markup;
     await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
-  } catch (e) {}
+  } catch (e) {
+    console.error("❌ Erro ao enviar mensagem:", e.message);
+  }
 }
 
 async function editMessage(chatId, messageId, text, reply_markup = null) {
@@ -318,20 +397,75 @@ async function editMessage(chatId, messageId, text, reply_markup = null) {
     const payload = { chat_id: chatId, message_id: messageId, text: text, parse_mode: "Markdown" };
     if (reply_markup) payload.reply_markup = reply_markup;
     await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
-  } catch (e) { await sendMessage(chatId, text, reply_markup); }
+  } catch (e) {
+    await sendMessage(chatId, text, reply_markup);
+  }
+}
+
+async function appendToSheets(rowData, sheetName = "Assinaturas") {
+  if (!GOOGLE_SHEETS_ID || !googleAuthData.email || !googleAuthData.key) return;
+  try {
+    const auth = new google.auth.JWT(googleAuthData.email, null, googleAuthData.key, ["https://www.googleapis.com/auth/spreadsheets"]);
+    const sheets = google.sheets({ version: "v4", auth });
+    const range = sheetName === "Assinaturas" ? "Assinaturas!A:I" : "Removidos!A:C";
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEETS_ID,
+      range: range,
+      valueInputOption: "USER_ENTERED",
+      resource: { values: [rowData] }
+    });
+    console.log(`✅ Dados salvos na planilha (${sheetName})`);
+  } catch (e) {
+    console.error(`❌ Erro Sheets (${sheetName}):`, e.message);
+  }
 }
 
 async function connectServices() {
   try {
+    console.log("🔄 Conectando serviços...");
+
     if (MONGODB_URI) {
       await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
-      const schemaP = new mongoose.Schema({ _id: Number, userId: Number, userName: String, groupKey: String, planKey: String, method: String, status: String, timestamp: { type: Date, default: Date.now } });
-      const schemaS = new mongoose.Schema({ _id: Number, userId: Number, chatId: Number, groupKey: String, planKey: String, expiresAt: Date, status: String });
+      const schemaP = new mongoose.Schema({
+        _id: Number,
+        userId: Number,
+        userName: String,
+        groupKey: String,
+        planKey: String,
+        method: String,
+        status: String,
+        timestamp: { type: Date, default: Date.now }
+      });
+      const schemaS = new mongoose.Schema({
+        _id: Number,
+        userId: Number,
+        chatId: Number,
+        groupKey: String,
+        planKey: String,
+        expiresAt: Date,
+        status: String
+      });
       if (!mongoose.models.PendingPayment) mongoose.model("PendingPayment", schemaP);
       if (!mongoose.models.Subscription) mongoose.model("Subscription", schemaS);
+      console.log("✅ MongoDB conectado");
     }
-    if (WEBHOOK_BASE_URL && BOT_TOKEN) await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_BASE_URL}/telegram`);
-  } catch (e) {}
+
+    if (WEBHOOK_BASE_URL && BOT_TOKEN) {
+      await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_BASE_URL}/telegram`);
+      console.log("✅ Webhook do Telegram configurado");
+    }
+
+    if (MP_ACCESS_TOKEN) {
+      console.log("✅ Mercado Pago configurado");
+    }
+
+    console.log("✅ Todos os serviços conectados!");
+  } catch (e) {
+    console.error("❌ Erro ao conectar serviços:", e.message);
+  }
 }
 
-app.listen(PORT, "0.0.0.0", () => { connectServices(); });
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  connectServices();
+});
