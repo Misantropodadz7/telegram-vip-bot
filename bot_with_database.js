@@ -71,6 +71,36 @@ app.post("/telegram", async (req, res) => {
     const text = message?.text || "";
     const callbackData = callback_query?.data;
 
+    // --- COMANDO /postar ---
+    if (text && text.startsWith("/postar")) {
+      if (userId.toString() !== OWNER_TELEGRAM_ID) {
+        await sendMessage(chatId, "❌ Você não tem permissão para usar este comando.");
+        return;
+      }
+
+      const content = text.substring("/postar".length).trim();
+      const ptMatch = content.match(/PT:\s*([\s\S]*?)(?=\nEN:|$)/i);
+      const enMatch = content.match(/EN:\s*([\s\S]*)/i);
+
+      if (!ptMatch || !enMatch) {
+        await sendMessage(chatId, "❌ Formato inválido. Use: `/postar\nPT: Seu texto em português\nEN: Your text in English`");
+        return;
+      }
+
+      const ptText = ptMatch[1].trim();
+      const enText = enMatch[1].trim();
+
+      if (VIP_BR_GROUP_ID) {
+        await sendMessage(VIP_BR_GROUP_ID, ptText, null, true);
+      }
+      if (VIP_INT_GROUP_ID) {
+        await sendMessage(VIP_INT_GROUP_ID, enText, null, true);
+      }
+
+      await sendMessage(chatId, "✅ Postagem bilíngue realizada com sucesso!");
+      return;
+    }
+
     // --- COMANDO /start ---
     if (text && text.startsWith("/start")) {
       await sendMessage(chatId, "👋 Bem-vindo! Escolha seu grupo VIP:", {
@@ -382,9 +412,9 @@ function getPlansConfig() {
   };
 }
 
-async function sendMessage(chatId, text, reply_markup = null) {
+async function sendMessage(chatId, text, reply_markup = null, protectContent = false) {
   try {
-    const payload = { chat_id: chatId, text: text, parse_mode: "Markdown" };
+    const payload = { chat_id: chatId, text: text, parse_mode: "Markdown", protect_content: protectContent, disable_web_page_preview: true };
     if (reply_markup) payload.reply_markup = reply_markup;
     await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
   } catch (e) {
@@ -392,9 +422,21 @@ async function sendMessage(chatId, text, reply_markup = null) {
   }
 }
 
+async function enableContentProtection(chatId) {
+  try {
+    await axios.post(`${TELEGRAM_API}/setChatContentProtection`, {
+      chat_id: chatId,
+      enable_content_protection: true
+    });
+    console.log(`✅ Proteção de conteúdo ativada para o chat ${chatId}`);
+  } catch (e) {
+    console.error(`❌ Erro ao ativar proteção de conteúdo para o chat ${chatId}:`, e.message);
+  }
+}
+
 async function editMessage(chatId, messageId, text, reply_markup = null) {
   try {
-    const payload = { chat_id: chatId, message_id: messageId, text: text, parse_mode: "Markdown" };
+    const payload = { chat_id: chatId, message_id: messageId, text: text, parse_mode: "Markdown", disable_web_page_preview: true };
     if (reply_markup) payload.reply_markup = reply_markup;
     await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
   } catch (e) {
@@ -453,6 +495,13 @@ async function connectServices() {
     if (WEBHOOK_BASE_URL && BOT_TOKEN) {
       await axios.get(`${TELEGRAM_API}/setWebhook?url=${WEBHOOK_BASE_URL}/telegram`);
       console.log("✅ Webhook do Telegram configurado");
+    }
+
+    if (VIP_BR_GROUP_ID) {
+      await enableContentProtection(VIP_BR_GROUP_ID);
+    }
+    if (VIP_INT_GROUP_ID) {
+      await enableContentProtection(VIP_INT_GROUP_ID);
     }
 
     if (MP_ACCESS_TOKEN) {
