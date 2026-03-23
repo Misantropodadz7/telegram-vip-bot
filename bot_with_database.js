@@ -68,7 +68,7 @@ app.post("/telegram", async (req, res) => {
     const messageId = message?.message_id || callback_query?.message?.message_id;
     const userId = message?.from?.id || callback_query?.from?.id;
     const username = message?.from?.username || callback_query?.from?.username || "User";
-    const text = message?.text || "";
+    const text = message?.text || message?.caption || "";
     const callbackData = callback_query?.data;
 
     // --- COMANDO /postar ---
@@ -83,18 +83,28 @@ app.post("/telegram", async (req, res) => {
       const enMatch = content.match(/EN:\s*([\s\S]*)/i);
 
       if (!ptMatch || !enMatch) {
-        await sendMessage(chatId, "❌ Formato inválido. Use: `/postar\nPT: Seu texto em português\nEN: Your text in English`");
+        await sendMessage(chatId, "❌ Formato inválido. Use: `/postar\nPT: Seu texto em português\nEN: Your text in English` (pode anexar foto ou vídeo)");
         return;
       }
 
       const ptText = ptMatch[1].trim();
       const enText = enMatch[1].trim();
 
-      if (VIP_BR_GROUP_ID) {
-        await sendMessage(VIP_BR_GROUP_ID, ptText, null, true);
-      }
-      if (VIP_INT_GROUP_ID) {
-        await sendMessage(VIP_INT_GROUP_ID, enText, null, true);
+      // Verificar se há mídia (foto ou vídeo)
+      const photo = message?.photo;
+      const video = message?.video;
+
+      if (photo) {
+        const fileId = photo[photo.length - 1].file_id;
+        if (VIP_BR_GROUP_ID) await sendPhoto(VIP_BR_GROUP_ID, fileId, ptText, true);
+        if (VIP_INT_GROUP_ID) await sendPhoto(VIP_INT_GROUP_ID, fileId, enText, true);
+      } else if (video) {
+        const fileId = video.file_id;
+        if (VIP_BR_GROUP_ID) await sendVideo(VIP_BR_GROUP_ID, fileId, ptText, true);
+        if (VIP_INT_GROUP_ID) await sendVideo(VIP_INT_GROUP_ID, fileId, enText, true);
+      } else {
+        if (VIP_BR_GROUP_ID) await sendMessage(VIP_BR_GROUP_ID, ptText, null, true);
+        if (VIP_INT_GROUP_ID) await sendMessage(VIP_INT_GROUP_ID, enText, null, true);
       }
 
       await sendMessage(chatId, "✅ Postagem bilíngue realizada com sucesso!");
@@ -292,60 +302,47 @@ function validateMercadoPagoSignature(req) {
       if (key === "v1") hash = value;
     }
 
-    if (!ts || !hash) {
-      console.log("⚠️ Timestamp ou hash ausentes");
-      return false;
-    }
+    if (!ts || !hash) return false;
 
-    // Construir manifest
-    const dataId = req.body.data?.id || "";
-    const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
+    const manifest = `id:${xRequestId};request-id:${xRequestId};ts:${ts};`;
+    const hmac = crypto.createHmac("sha256", MP_WEBHOOK_SECRET);
+    hmac.update(manifest);
+    const calculatedHash = hmac.digest("hex");
 
-    // Gerar HMAC
-    const sha = crypto.createHmac("sha256", MP_WEBHOOK_SECRET).update(manifest).digest("hex");
-
-    const isValid = sha === hash;
-    console.log(`🔐 Validação de assinatura: ${isValid ? "✅ OK" : "❌ FALHOU"}`);
-    return isValid;
+    return calculatedHash === hash;
   } catch (err) {
-    console.error("❌ Erro ao validar assinatura:", err.message);
     return false;
   }
 }
 
+// ===== FUNÇÕES DE ACESSO =====
+
 async function liberarAcessoAutomatico(chatId, userId, groupKey, planKey) {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      console.log("⚠️ MongoDB offline");
-      return;
-    }
-
     const config = getPlansConfig();
-    const plan = config[groupKey]?.plans[planKey === 'monthly' ? 'm' : planKey === 'quarterly' ? 'q' : 's'];
-    const groupId = config[groupKey]?.group_id;
+    const groupConfig = config[groupKey];
+    const plan = groupConfig.plans[planKey];
 
-    if (!plan || !groupId) {
-      console.log("⚠️ Plano ou grupo não encontrado");
-      return;
-    }
+    if (!plan) throw new Error("Plano não encontrado");
 
-    // Criar link de convite único
-    const inviteResponse = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
-      chat_id: groupId,
+    // Gerar link de convite único
+    const response = await axios.post(`${TELEGRAM_API}/createChatInviteLink`, {
+      chat_id: groupConfig.group_id,
       member_limit: 1,
-      expire_date: Math.floor(Date.now() / 1000) + 1800 // Expira em 30 minutos
+      expire_date: Math.floor(Date.now() / 1000) + 86400 // Expira em 24h
     });
 
-    const inviteLink = inviteResponse.data.result.invite_link;
+    const inviteLink = response.data.result.invite_link;
 
-    // Salvar assinatura no MongoDB
+    // Calcular data de expiração
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + plan.days);
+
+    // Salvar no MongoDB
     const Subscription = mongoose.model("Subscription");
-    const expiresAt = new Date(Date.now() + plan.days * 86400000);
-
-    await Subscription.findByIdAndUpdate(
-      userId,
+    await Subscription.findOneAndUpdate(
+      { userId: userId, groupKey: groupKey },
       {
-        _id: userId,
         userId: userId,
         chatId: chatId,
         groupKey: groupKey,
@@ -419,6 +416,24 @@ async function sendMessage(chatId, text, reply_markup = null, protectContent = f
     await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
   } catch (e) {
     console.error("❌ Erro ao enviar mensagem:", e.message);
+  }
+}
+
+async function sendPhoto(chatId, photo, caption, protectContent = false) {
+  try {
+    const payload = { chat_id: chatId, photo: photo, caption: caption, parse_mode: "Markdown", protect_content: protectContent };
+    await axios.post(`${TELEGRAM_API}/sendPhoto`, payload);
+  } catch (e) {
+    console.error("❌ Erro ao enviar foto:", e.message);
+  }
+}
+
+async function sendVideo(chatId, video, caption, protectContent = false) {
+  try {
+    const payload = { chat_id: chatId, video: video, caption: caption, parse_mode: "Markdown", protect_content: protectContent };
+    await axios.post(`${TELEGRAM_API}/sendVideo`, payload);
+  } catch (e) {
+    console.error("❌ Erro ao enviar vídeo:", e.message);
   }
 }
 
